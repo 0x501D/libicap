@@ -292,7 +292,8 @@ int ic_create_uri(ic_query_int_t *q)
 int ic_create_header(ic_query_int_t *q, const char *method)
 {
     if (asprintf(&q->cl_header, "%s %s %s\r\n%s%s",
-                method, q->uri, "ICAP/1.0", "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
+                method, q->uri, IC_ICAP_ID,
+                "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
         return -IC_ERR_ENOMEM;
     }
 
