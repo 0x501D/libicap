@@ -13,6 +13,7 @@
 #include <sys/select.h>
 
 #define IC_EXPORT __attribute__((visibility ("default")))
+#define IC_ICAP_ID "ICAP/1.0"
 #define IC_METHOD_REQMOD  "REQMOD"
 #define IC_METHOD_RESPMOD "RESPMOD"
 #define IC_METHOD_OPTIONS "OPTIONS"
@@ -60,7 +61,8 @@ IC_EXPORT const char *ic_err_msg[] = {
     "No events on socket",
     "select(2) error",
     "ICAP request data loss",
-    "Error sending ICAP request"
+    "Error sending ICAP request",
+    "Not an ICAP service"
 };
 
 enum {
@@ -77,6 +79,7 @@ enum {
     IC_ERR_SELECT,
     IC_ERR_SEND_PARTED,
     IC_ERR_SEND,
+    IC_ERR_NON_ICAP,
     IC_ERR_COUNT
 };
 
@@ -243,7 +246,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q)
         return rc;
     }
 
-    if (ic_parse_header(icap) != 0) {
+    if ((rc = ic_parse_header(icap)) != 0) {
         return rc;
     }
 
@@ -254,6 +257,11 @@ int ic_parse_header(ic_query_int_t *q)
 {
     size_t len = 0;
     char *p = q->srv_data;
+    size_t id_len = sizeof(IC_ICAP_ID) - 1;
+
+    if ((q->srv_data_len < id_len) || memcmp(q->srv_data, IC_ICAP_ID, id_len) != 0) {
+        return -IC_ERR_NON_ICAP;
+    }
 
     for (len = 0; len != q->srv_data_len; len++, p++) {
         if ((len + 4 <= q->srv_data_len) && (memcmp(p, IC_RN_TWICE, 4) == 0)) {
