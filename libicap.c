@@ -7,10 +7,10 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#include <poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 
 #define IC_EXPORT __attribute__((visibility ("default")))
 #define IC_METHOD_REQMOD  "REQMOD"
@@ -29,6 +29,7 @@ typedef struct ic_query_int {
     char *service;
     char *uri;
     char *cl_header;
+    char *srv_header;
 } ic_query_int_t;
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
@@ -42,7 +43,12 @@ IC_EXPORT const char *ic_err_msg[] = {
     "Socket creation failed",
     "ICAP query structure was not initialized",
     "Cannot allocate memory",
-    "Cannot set socket to NONBLOCK mode"
+    "Cannot set socket to NONBLOCK mode",
+    "Cannot connect to ICAP server: timeout expired",
+    "ICAP service is not responding",
+    "Cannot get socket options",
+    "No events on socket",
+    "select(2) error"
 };
 
 enum {
@@ -52,6 +58,11 @@ enum {
     IC_ERR_QUERY_NULL,
     IC_ERR_ENOMEM,
     IC_ERR_SRV_NONBLOCK,
+    IC_ERR_SRV_TIMEOUT,
+    IC_ERR_SRV_UNREACH,
+    IC_ERR_SOCKET_OPTS,
+    IC_ERR_SOCKET_NO_EVENTS,
+    IC_ERR_SELECT,
     IC_ERR_COUNT
 };
 
@@ -78,6 +89,7 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->uri);
     free(icap->srv);
     free(icap->cl_header);
+    free(icap->srv_header);
     free(q->data);
 }
 
@@ -107,7 +119,10 @@ IC_EXPORT const char *ic_strerror(int err)
 
 IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
 {
-    int sd;
+    int err = 0;
+    int sd, flags, ret;
+    fd_set rset, wset;
+    struct timeval tv;
     struct sockaddr_in dst;
     ic_query_int_t *icap = ic_int_query(q);
 
@@ -127,13 +142,45 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
         return -IC_ERR_SRV_SOCKET;
     }
 
-    if (fcntl(sd, F_SETFL, O_NONBLOCK) == -1) {
+    flags = fcntl(sd, F_GETFL, 0);
+    if (fcntl(sd, F_SETFL, flags | O_NONBLOCK) == -1) {
         return -IC_ERR_SRV_NONBLOCK;
     }
 
     if ((connect(sd, (struct sockaddr *) &dst, sizeof(dst)) != 0)
             && (errno != EINPROGRESS)) {
         return -IC_ERR_SRV_CONNECT;
+    }
+
+    FD_ZERO(&rset);
+    FD_SET(sd, &rset);
+    wset = rset;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+
+    ret = select(sd + 1, &rset, &wset, NULL, &tv);
+    if (ret == 0) {
+        close(sd);
+        return -IC_ERR_SRV_TIMEOUT;
+    } else if (ret == -1) {
+        close(sd);
+        return -IC_ERR_SELECT;
+    }
+
+    if (FD_ISSET(sd, &rset) || FD_ISSET(sd, &wset)) {
+        socklen_t len = sizeof(err);
+        if (getsockopt(sd, SOL_SOCKET, SO_ERROR, &err, &len) == -1) {
+            close(sd);
+            return -IC_ERR_SOCKET_OPTS;
+        }
+    } else {
+        close(sd);
+        return -IC_ERR_SOCKET_NO_EVENTS;
+    }
+
+    if (err) {
+        close(sd);
+        return -IC_ERR_SRV_UNREACH;
     }
 
     icap->sd = sd;
