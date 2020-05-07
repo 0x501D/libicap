@@ -17,6 +17,8 @@
 #define IC_METHOD_RESPMOD "RESPMOD"
 #define IC_METHOD_OPTIONS "OPTIONS"
 #define IC_CHUNK_TERM "0\r\n\r\n"
+#define IC_RN_TWICE "\r\n\r\n"
+#define IC_SRV_ALLOC_SIZE 2048
 
 typedef struct ic_query {
     void *data;
@@ -25,17 +27,24 @@ typedef struct ic_query {
 typedef struct ic_query_int {
     int sd;
     uint16_t port;
+    size_t cl_data_len;
+    size_t srv_data_len;
     char *srv;
     char *service;
     char *uri;
     char *cl_header;
+    char *cl_data;
     char *srv_header;
+    char *srv_data;
 } ic_query_int_t;
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
 int ic_create_uri(ic_query_int_t *q);
 int ic_create_header(ic_query_int_t *q, const char *method);
 int ic_poll_icap(ic_query_int_t *q);
+int ic_send_to_service(ic_query_int_t *q);
+int ic_read_from_service(ic_query_int_t *q);
+int ic_parse_header(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -49,7 +58,9 @@ IC_EXPORT const char *ic_err_msg[] = {
     "ICAP service is not responding",
     "Cannot get socket options",
     "No events on socket",
-    "select(2) error"
+    "select(2) error",
+    "ICAP request data loss",
+    "Error sending ICAP request"
 };
 
 enum {
@@ -64,6 +75,8 @@ enum {
     IC_ERR_SOCKET_OPTS,
     IC_ERR_SOCKET_NO_EVENTS,
     IC_ERR_SELECT,
+    IC_ERR_SEND_PARTED,
+    IC_ERR_SEND,
     IC_ERR_COUNT
 };
 
@@ -90,7 +103,9 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->uri);
     free(icap->srv);
     free(icap->cl_header);
+    free(icap->cl_data);
     free(icap->srv_header);
+    free(icap->srv_data);
     free(q->data);
 }
 
@@ -200,7 +215,7 @@ IC_EXPORT int ic_send_query(ic_query_t *q)
 
 IC_EXPORT int ic_get_options(ic_query_t *q)
 {
-    int err;
+    int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
 
     if (!icap) {
@@ -211,15 +226,49 @@ IC_EXPORT int ic_get_options(ic_query_t *q)
         if ((err = ic_create_uri(icap)) != 0) {
             return err;
         }
-    }
 
-    if (!icap->cl_header) {
         if ((err = ic_create_header(icap, IC_METHOD_OPTIONS)) != 0) {
             return err;
         }
+
+        icap->cl_data = strdup(icap->cl_header);
+        if (!icap->cl_data) {
+            return -IC_ERR_ENOMEM;
+        }
+
+        icap->cl_data_len = strlen(icap->cl_data);
     }
 
-    return ic_poll_icap(icap);
+    if ((rc = ic_poll_icap(icap)) != 0) {
+        return rc;
+    }
+
+    if (ic_parse_header(icap) != 0) {
+        return rc;
+    }
+
+    return 0;
+}
+
+int ic_parse_header(ic_query_int_t *q)
+{
+    size_t len = 0;
+    char *p = q->srv_data;
+
+    for (len = 0; len != q->srv_data_len; len++, p++) {
+        if ((len + 4 <= q->srv_data_len) && (memcmp(p, IC_RN_TWICE, 4) == 0)) {
+            break;
+        }
+    }
+
+    q->srv_header = calloc(1, len + 1);
+    if (!q->srv_header) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    memcpy(q->srv_header, q->srv_data, len);
+
+    return 0;
 }
 
 int ic_create_uri(ic_query_int_t *q)
@@ -235,7 +284,7 @@ int ic_create_uri(ic_query_int_t *q)
 int ic_create_header(ic_query_int_t *q, const char *method)
 {
     if (asprintf(&q->cl_header, "%s %s %s\r\n%s%s",
-                method, q->uri, "ICAP/1.0", "Encapsulated: null-body=0", IC_CHUNK_TERM) == -1) {
+                method, q->uri, "ICAP/1.0", "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
         return -IC_ERR_ENOMEM;
     }
 
@@ -244,7 +293,7 @@ int ic_create_header(ic_query_int_t *q, const char *method)
 
 int ic_poll_icap(ic_query_int_t *q)
 {
-    int rc, done = 0;
+    int rc = 0, done = 0, send_done = 0;
     fd_set rset, wset;
     struct timeval tv;
 
@@ -253,8 +302,11 @@ int ic_poll_icap(ic_query_int_t *q)
 
     while (!done) {
         FD_ZERO(&rset);
+        FD_ZERO(&wset);
         FD_SET(q->sd, &rset);
-        wset = rset;
+        if (!send_done) {
+            wset = rset;
+        };
 
         /* TODO use exceptfds too */
         rc = select(q->sd + 1, &rset, &wset, NULL, &tv);
@@ -265,16 +317,82 @@ int ic_poll_icap(ic_query_int_t *q)
             return -IC_ERR_SRV_TIMEOUT;
         default:
             if (FD_ISSET(q->sd, &rset)) {
-                printf("read data\n");
-                done = 1;
+                //printf("read data\n");
+                if ((rc = ic_read_from_service(q)) == 0) {
+                    done = 1;
+                } else {
+                    return rc;
+                }
             }
 
             if (FD_ISSET(q->sd, &wset)) {
-                printf("send data\n");
-                done = 1;
+                //printf("send data\n");
+                if ((rc = ic_send_to_service(q)) == 0) {
+                    send_done = 1;
+                } else {
+                    return rc;
+                }
             }
         }
     }
+
+    return rc;
+}
+
+int ic_send_to_service(ic_query_int_t *q)
+{
+    ssize_t sended = 0;
+    size_t total_sended = 0;
+
+    do {
+        sended = send(q->sd, q->cl_data + total_sended, q->cl_data_len - total_sended, 0);
+
+        if (sended < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            return -IC_ERR_SEND;
+        }
+        total_sended += sended;
+    } while (sended > 0);
+
+    if (total_sended != q->cl_data_len) {
+        return -IC_ERR_SEND_PARTED;
+    }
+
+    return 0;
+}
+
+int ic_read_from_service(ic_query_int_t *q)
+{
+    ssize_t nread;
+    size_t total_read = 0;
+    size_t n_alloc = IC_SRV_ALLOC_SIZE;
+
+    if ((q->srv_data = calloc(1, n_alloc)) == NULL) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    do {
+        if (total_read >= IC_SRV_ALLOC_SIZE) {
+            n_alloc += IC_SRV_ALLOC_SIZE;
+            void *tmp = realloc(q->srv_data, n_alloc);
+            if (!tmp) {
+                free(q->srv_data);
+                return -IC_ERR_ENOMEM;
+            }
+
+            q->srv_data = tmp;
+        }
+
+        nread  = read(q->sd, q->srv_data, IC_SRV_ALLOC_SIZE);
+
+        if (nread < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            return -IC_ERR_SEND;
+        } else if (nread < 0) {
+            break;
+        }
+        total_read += nread;
+    } while (nread > 0);
+
+    q->srv_data_len = total_read;
 
     return 0;
 }
@@ -296,6 +414,9 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
 
     if (icap->service) {
         free(icap->service);
+        free(icap->uri);
+        free(icap->cl_header);
+        free(icap->cl_data);
     }
 
     icap->service = strdup(service);
@@ -305,4 +426,31 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
     }
 
     return 0;
+}
+
+IC_EXPORT const char *ic_get_icap_header(ic_query_t *q)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return NULL;
+    }
+
+    return icap->srv_header;
+}
+
+IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap || !len) {
+        return NULL;
+    }
+
+    if (!len) {
+    }
+
+    *len = icap->srv_data_len;
+
+    return icap->srv_data;
 }

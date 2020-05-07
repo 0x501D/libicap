@@ -19,6 +19,8 @@ void ic_disconnect(ic_query_t *q);
 int ic_send_query(ic_query_t *q);
 int ic_get_options(ic_query_t *q);
 int ic_set_service(ic_query_t *q, const char *service);
+const char *ic_get_icap_header(ic_query_t *q);
+const char *ic_get_content(ic_query_t *q, size_t *len);
 
 #ifdef _cplusplus
 }

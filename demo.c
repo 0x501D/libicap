@@ -7,6 +7,7 @@
 int main(int argc, char **argv)
 {
     int err, rc = 0;
+    const char *icap_hdr;
     ic_query_t q;
 
     if (argc != 3) {
@@ -33,7 +34,15 @@ int main(int argc, char **argv)
         goto out1;
     }
 
-    ic_get_options(&q);
+    if ((err = ic_get_options(&q)) < 0) {
+        printf("%s\n", ic_strerror(err));
+    }
+
+    icap_hdr = ic_get_icap_header(&q);
+    if (icap_hdr) {
+        printf("%s\n", icap_hdr);
+    }
+
 out1:
     ic_disconnect(&q);
 out0:
