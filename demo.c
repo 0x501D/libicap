@@ -4,10 +4,15 @@
 
 #include <libicap.h>
 
-int main()
+int main(int argc, char **argv)
 {
     int err, rc = 0;
     ic_query_t q;
+
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <ipaddr> <port>\n", argv[0]);
+        exit(1);
+    }
 
     memset(&q, 0x0, sizeof(q));
 
@@ -16,7 +21,7 @@ int main()
         exit(1);
     }
 
-    if ((err = ic_connect("10.20.0.2", 1344, &q)) < 0) {
+    if ((err = ic_connect(&q, argv[1], atoi(argv[2]))) < 0) {
         printf("%s\n", ic_strerror(err));
         rc = 1;
         goto out0;

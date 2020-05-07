@@ -101,7 +101,7 @@ IC_EXPORT const char *ic_strerror(int err)
     return ic_err_msg[idx];
 }
 
-IC_EXPORT int ic_connect(const char *srv, uint16_t port, ic_query_t *q)
+IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
 {
     int sd;
     struct sockaddr_in dst;
