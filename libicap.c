@@ -35,6 +35,7 @@ typedef struct ic_query_int {
 ic_query_int_t *ic_int_query(ic_query_t *q);
 int ic_create_uri(ic_query_int_t *q);
 int ic_create_header(ic_query_int_t *q, const char *method);
+int ic_poll_icap(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -218,7 +219,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q)
         }
     }
 
-    return 0;
+    return ic_poll_icap(icap);
 }
 
 int ic_create_uri(ic_query_int_t *q)
@@ -243,6 +244,37 @@ int ic_create_header(ic_query_int_t *q, const char *method)
 
 int ic_poll_icap(ic_query_int_t *q)
 {
+    int rc, done = 0;
+    fd_set rset, wset;
+    struct timeval tv;
+
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+
+    while (!done) {
+        FD_ZERO(&rset);
+        FD_SET(q->sd, &rset);
+        wset = rset;
+
+        /* TODO use exceptfds too */
+        rc = select(q->sd + 1, &rset, &wset, NULL, &tv);
+        switch (rc) {
+        case -1:
+            return -IC_ERR_SELECT;
+        case 0:
+            return -IC_ERR_SRV_TIMEOUT;
+        default:
+            if (FD_ISSET(q->sd, &rset)) {
+                printf("read data\n");
+                done = 1;
+            }
+
+            if (FD_ISSET(q->sd, &wset)) {
+                printf("send data\n");
+                done = 1;
+            }
+        }
+    }
 
     return 0;
 }
