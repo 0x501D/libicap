@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #include <poll.h>
 #include <netinet/in.h>
@@ -39,7 +41,8 @@ IC_EXPORT const char *ic_err_msg[] = {
     "Cannot connect to ICAP server",
     "Socket creation failed",
     "ICAP query structure was not initialized",
-    "Cannot allocate memory"
+    "Cannot allocate memory",
+    "Cannot set socket to NONBLOCK mode"
 };
 
 enum {
@@ -48,6 +51,7 @@ enum {
     IC_ERR_SRV_SOCKET,
     IC_ERR_QUERY_NULL,
     IC_ERR_ENOMEM,
+    IC_ERR_SRV_NONBLOCK,
     IC_ERR_COUNT
 };
 
@@ -123,7 +127,12 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
         return -IC_ERR_SRV_SOCKET;
     }
 
-    if (connect(sd, (struct sockaddr *) &dst, sizeof(dst)) != 0) {
+    if (fcntl(sd, F_SETFL, O_NONBLOCK) == -1) {
+        return -IC_ERR_SRV_NONBLOCK;
+    }
+
+    if ((connect(sd, (struct sockaddr *) &dst, sizeof(dst)) != 0)
+            && (errno != EINPROGRESS)) {
         return -IC_ERR_SRV_CONNECT;
     }
 
