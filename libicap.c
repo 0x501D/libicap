@@ -456,9 +456,6 @@ IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
         return NULL;
     }
 
-    if (!len) {
-    }
-
     *len = icap->srv_data_len;
 
     return icap->srv_data;
