@@ -1,2 +1,4 @@
 libicap.so
-demo
+ic_demo
+*.o
+*.d

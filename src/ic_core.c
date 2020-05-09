@@ -12,8 +12,12 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 
+//#include <ic_utils.h>
+
 #define IC_EXPORT __attribute__((visibility ("default")))
 #define IC_ICAP_ID "ICAP/1.0"
+#define IC_CODE_OK          200
+#define IC_CODE_BAD_REQUEST 400
 #define IC_METHOD_REQMOD  "REQMOD"
 #define IC_METHOD_RESPMOD "RESPMOD"
 #define IC_METHOD_OPTIONS "OPTIONS"
@@ -25,9 +29,19 @@ typedef struct ic_query {
     void *data;
 } ic_query_t;
 
+typedef struct ic_opts {
+    size_t preview_len;
+    unsigned int allow_204:1;
+    unsigned int m_resp:1;
+    unsigned int m_req:1;
+} ic_opts_t;
+
 typedef struct ic_query_int {
     int sd;
+    int rc;
     uint16_t port;
+    ic_opts_t opts_cl;
+    ic_opts_t opts_srv;
     size_t cl_data_len;
     size_t srv_data_len;
     char *srv;
@@ -62,7 +76,10 @@ IC_EXPORT const char *ic_err_msg[] = {
     "select(2) error",
     "ICAP request data loss",
     "Error sending ICAP request",
-    "Not an ICAP service"
+    "Not an ICAP service",
+    "End of ICAP header was not found",
+    "ICAP/1.0 400 Bad request",
+    "Incorrect ICAP header"
 };
 
 enum {
@@ -80,6 +97,9 @@ enum {
     IC_ERR_SEND_PARTED,
     IC_ERR_SEND,
     IC_ERR_NON_ICAP,
+    IC_ERR_HEADER_END,
+    IC_ERR_ICAP_BAD_REQUEST,
+    IC_ERR_BAD_HEADER,
     IC_ERR_COUNT
 };
 
@@ -256,7 +276,9 @@ IC_EXPORT int ic_get_options(ic_query_t *q)
 int ic_parse_header(ic_query_int_t *q)
 {
     size_t len = 0;
+    int end_found = 0;
     char *p = q->srv_data;
+    char *str;
     size_t id_len = sizeof(IC_ICAP_ID) - 1;
 
     if ((q->srv_data_len < id_len) || memcmp(q->srv_data, IC_ICAP_ID, id_len) != 0) {
@@ -265,8 +287,13 @@ int ic_parse_header(ic_query_int_t *q)
 
     for (len = 0; len != q->srv_data_len; len++, p++) {
         if ((len + 4 <= q->srv_data_len) && (memcmp(p, IC_RN_TWICE, 4) == 0)) {
+            end_found = 1;
             break;
         }
+    }
+
+    if (!end_found) {
+        return -IC_ERR_HEADER_END;
     }
 
     q->srv_header = calloc(1, len + 1);
@@ -275,6 +302,44 @@ int ic_parse_header(ic_query_int_t *q)
     }
 
     memcpy(q->srv_header, q->srv_data, len);
+
+    /* Get ICAP status code */
+    if ((str = strstr(q->srv_header, IC_ICAP_ID)) != NULL) {
+        char *start, *end;
+        size_t space = 0;
+
+        while (*str) {
+            if ((*str == 0x20) && !space && (*(str + 1) != '\0')) {
+                start = str + 1;
+                space++;
+            } else if ((*str == 0x20) && space && (str != q->srv_header)) {
+                end = str;
+                space++;
+                break;
+            }
+
+            str++;
+        }
+
+        if (space == 2) {
+            char *status;
+            size_t slen = end - start;
+
+            if ((status = calloc(1, slen + 1)) == NULL) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            memcpy(status, start, slen);
+            free(status);
+        } else {
+            //return -IC_ERR_STATUS_NOT_FOUND;
+        }
+    } else {
+        return -IC_ERR_BAD_HEADER;
+    }
+
+    /* Get ICAP options */
+    //if (strstr(q->srv_header, ""))
 
     return 0;
 }
