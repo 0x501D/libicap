@@ -312,7 +312,7 @@ int ic_parse_header(ic_query_int_t *q)
             if ((*str == 0x20) && !space && (*(str + 1) != '\0')) {
                 start = str + 1;
                 space++;
-            } else if ((*str == 0x20) && space && (str != q->srv_header)) {
+            } else if ((*str == 0x20) && space) {
                 end = str;
                 space++;
                 break;
@@ -330,6 +330,7 @@ int ic_parse_header(ic_query_int_t *q)
             }
 
             memcpy(status, start, slen);
+
             free(status);
         } else {
             //return -IC_ERR_STATUS_NOT_FOUND;

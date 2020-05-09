@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O0 -ggdb -I../ -Wall -Wextra -Wformat-security -pedantic -fvisibility=hidden -shared -fPIC
+CFLAGS = -O0 -ggdb -I. -Wall -Wextra -Wformat-security -pedantic -fvisibility=hidden -shared -fPIC
 LDFLAGS = -L. -licap
 SRC = $(wildcard *.c)
 OBJ = $(SRC:.c=.o)
@@ -11,7 +11,7 @@ libicap.so: $(OBJ)
 -include $(DEP)
 
 %.d: %.c
-	@$(CC) -shared -fPIC $< -MM -MT $(@:.d=.o) >$@
+	@$(CC) $< -MM -MT $(@:.d=.o) >$@
 
 demo:
 	$(MAKE) -C demo
