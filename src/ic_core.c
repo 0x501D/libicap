@@ -13,18 +13,8 @@
 #include <sys/select.h>
 
 #include "ic_err.h"
+#include "ic_core.h"
 #include "ic_utils.h"
-
-#define IC_EXPORT __attribute__((visibility ("default")))
-#define IC_ICAP_ID "ICAP/1.0"
-#define IC_CODE_OK          200
-#define IC_CODE_BAD_REQUEST 400
-#define IC_METHOD_REQMOD  "REQMOD"
-#define IC_METHOD_RESPMOD "RESPMOD"
-#define IC_METHOD_OPTIONS "OPTIONS"
-#define IC_CHUNK_TERM "0\r\n\r\n"
-#define IC_RN_TWICE "\r\n\r\n"
-#define IC_SRV_ALLOC_SIZE 2048
 
 enum {
     IC_METHOD_ID_REQ,
@@ -349,7 +339,8 @@ int ic_parse_header(ic_query_int_t *q, int method)
 
     /* Get ICAP options */
     if (method == IC_METHOD_ID_OPTS) {
-        if ((str = strstr(q->srv_header, "\nMethods: "))) {
+        /* RFC-3507: Field names are case-insensitive. */
+        if ((str = strcasestr(q->srv_header, "\nMethods: "))) {
             if (strstr(str, "RESPMOD")) {
                 q->opts_srv.m_resp = 1;
             }
@@ -360,13 +351,13 @@ int ic_parse_header(ic_query_int_t *q, int method)
             return -IC_ERR_METHODS_NOT_FOUND;
         }
 
-        if ((str = strstr(q->srv_header, "\nAllow: "))) {
+        if ((str = strcasestr(q->srv_header, "\nAllow: "))) {
             if (strstr(str, "204")) {
                 q->opts_srv.allow_204 = 1;
             }
         }
 
-        if ((str = strstr(q->srv_header, "\nPreview: "))) {
+        if ((str = strcasestr(q->srv_header, "\nPreview: "))) {
             int rc;
             size_t plen;
             char *start, *end, *preview;
@@ -544,10 +535,10 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
     }
 
     if (icap->service) {
-        free(icap->service);
-        free(icap->uri);
-        free(icap->cl_header);
-        free(icap->cl_data);
+        IC_FREE(icap->service);
+        IC_FREE(icap->uri);
+        IC_FREE(icap->cl_header);
+        IC_FREE(icap->cl_data);
     }
 
     icap->service = strdup(service);
