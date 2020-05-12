@@ -1,6 +1,5 @@
 CC = gcc
 CFLAGS = -O0 -ggdb -Wall -Wextra -Wformat-security -pedantic -fvisibility=hidden -shared -fPIC
-LDFLAGS = -L. -licap
 SRC = $(wildcard *.c)
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
