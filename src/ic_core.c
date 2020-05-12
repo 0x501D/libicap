@@ -12,7 +12,8 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 
-//#include <ic_utils.h>
+#include "ic_err.h"
+#include "ic_utils.h"
 
 #define IC_EXPORT __attribute__((visibility ("default")))
 #define IC_ICAP_ID "ICAP/1.0"
@@ -25,12 +26,18 @@
 #define IC_RN_TWICE "\r\n\r\n"
 #define IC_SRV_ALLOC_SIZE 2048
 
+enum {
+    IC_METHOD_ID_REQ,
+    IC_METHOD_ID_RESP,
+    IC_METHOD_ID_OPTS
+};
+
 typedef struct ic_query {
     void *data;
 } ic_query_t;
 
 typedef struct ic_opts {
-    size_t preview_len;
+    uint32_t preview_len;
     unsigned int allow_204:1;
     unsigned int m_resp:1;
     unsigned int m_req:1;
@@ -38,7 +45,7 @@ typedef struct ic_opts {
 
 typedef struct ic_query_int {
     int sd;
-    int rc;
+    uint32_t rc;
     uint16_t port;
     ic_opts_t opts_cl;
     ic_opts_t opts_srv;
@@ -59,7 +66,7 @@ int ic_create_header(ic_query_int_t *q, const char *method);
 int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
-int ic_parse_header(ic_query_int_t *q);
+int ic_parse_header(ic_query_int_t *q, int method);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -79,28 +86,14 @@ IC_EXPORT const char *ic_err_msg[] = {
     "Not an ICAP service",
     "End of ICAP header was not found",
     "ICAP/1.0 400 Bad request",
-    "Incorrect ICAP header"
-};
-
-enum {
-    IC_ERR_SRV_BADADDR = 1,
-    IC_ERR_SRV_CONNECT,
-    IC_ERR_SRV_SOCKET,
-    IC_ERR_QUERY_NULL,
-    IC_ERR_ENOMEM,
-    IC_ERR_SRV_NONBLOCK,
-    IC_ERR_SRV_TIMEOUT,
-    IC_ERR_SRV_UNREACH,
-    IC_ERR_SOCKET_OPTS,
-    IC_ERR_SOCKET_NO_EVENTS,
-    IC_ERR_SELECT,
-    IC_ERR_SEND_PARTED,
-    IC_ERR_SEND,
-    IC_ERR_NON_ICAP,
-    IC_ERR_HEADER_END,
-    IC_ERR_ICAP_BAD_REQUEST,
-    IC_ERR_BAD_HEADER,
-    IC_ERR_COUNT
+    "Bad header in server response",
+    "Internal error: null pointer",
+    "Integer overflow",
+    "Bad integer value",
+    "Cannot get status code from server response",
+    "Incorrect ICAP header",
+    "Bad request",
+    "Cannot get methods list from server response"
 };
 
 IC_EXPORT int ic_query_init(ic_query_t *q)
@@ -149,7 +142,7 @@ IC_EXPORT const char *ic_strerror(int err)
 {
     int idx = -err; 
 
-    if (err > 0 || idx > IC_ERR_COUNT) {
+    if (err > 0 || idx >= IC_ERR_COUNT) {
         return ic_err_msg[0];
     }
 
@@ -266,14 +259,14 @@ IC_EXPORT int ic_get_options(ic_query_t *q)
         return rc;
     }
 
-    if ((rc = ic_parse_header(icap)) != 0) {
+    if ((rc = ic_parse_header(icap, IC_METHOD_ID_OPTS)) != 0) {
         return rc;
     }
 
     return 0;
 }
 
-int ic_parse_header(ic_query_int_t *q)
+int ic_parse_header(ic_query_int_t *q, int method)
 {
     size_t len = 0;
     int end_found = 0;
@@ -322,6 +315,7 @@ int ic_parse_header(ic_query_int_t *q)
         }
 
         if (space == 2) {
+            int rc;
             char *status;
             size_t slen = end - start;
 
@@ -331,16 +325,78 @@ int ic_parse_header(ic_query_int_t *q)
 
             memcpy(status, start, slen);
 
+            if ((rc = ic_strtoui(status, &q->rc, 10)) != 0) {
+                free(status);
+                return rc;
+            }
+
             free(status);
         } else {
-            //return -IC_ERR_STATUS_NOT_FOUND;
+            return -IC_ERR_STATUS_NOT_FOUND;
         }
     } else {
         return -IC_ERR_BAD_HEADER;
     }
 
+    if (method == IC_METHOD_ID_OPTS && q->rc != IC_CODE_OK) {
+        switch (q->rc) {
+        case IC_CODE_BAD_REQUEST:
+            return -IC_ERR_BAD_REQUEST;
+        default:
+            return -IC_ERR_COUNT;
+        }
+    }
+
     /* Get ICAP options */
-    //if (strstr(q->srv_header, ""))
+    if (method == IC_METHOD_ID_OPTS) {
+        if ((str = strstr(q->srv_header, "\nMethods: "))) {
+            if (strstr(str, "RESPMOD")) {
+                q->opts_srv.m_resp = 1;
+            }
+            if (strstr(str, "REQMOD")) {
+                q->opts_srv.m_req = 1;
+            }
+        } else {
+            return -IC_ERR_METHODS_NOT_FOUND;
+        }
+
+        if ((str = strstr(q->srv_header, "\nAllow: "))) {
+            if (strstr(str, "204")) {
+                q->opts_srv.allow_204 = 1;
+            }
+        }
+
+        if ((str = strstr(q->srv_header, "\nPreview: "))) {
+            int rc;
+            size_t plen;
+            char *start, *end, *preview;
+
+            while (*str) {
+                if (*str == 0x20 && *(str + 1) != '\0') {
+                    start = str + 1;
+                }
+                if (*str == '\r') {
+                    end = str;
+                    break;
+                }
+                str++;
+            }
+
+            plen = end - start;
+            if ((preview = calloc(1, plen + 1)) == NULL) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            memcpy(preview, start, plen);
+
+            if ((rc = ic_strtoui(preview, &q->opts_srv.preview_len, 10)) != 0) {
+                free(preview);
+                return rc;
+            }
+
+            free(preview);
+        }
+    }
 
     return 0;
 }
