@@ -15,7 +15,10 @@ libicap.so: $(OBJ)
 demo:
 	$(MAKE) -C demo
 
+clean_demo:
+	$(MAKE) -C demo clean
+
 clean:
 	rm -f libicap.so *.o *.d
 
-.PHONY: demo clean
+.PHONY: demo clean clean_demo

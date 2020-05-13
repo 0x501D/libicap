@@ -71,13 +71,7 @@ int main(int argc, char **argv)
         goto out0;
     }
 
-    if ((err = ic_set_service(&q, "echo")) < 0) {
-        printf("%s\n", ic_strerror(err));
-        rc = 1;
-        goto out1;
-    }
-
-    if ((err = ic_get_options(&q)) < 0) {
+    if ((err = ic_get_options(&q, "echo")) < 0) {
         printf("%s\n", ic_strerror(err));
     }
 

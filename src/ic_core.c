@@ -57,6 +57,7 @@ int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
 int ic_parse_header(ic_query_int_t *q, int method);
+void ic_query_clean(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -113,6 +114,17 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->srv_header);
     free(icap->srv_data);
     free(q->data);
+}
+
+void ic_query_clean(ic_query_int_t *q)
+{
+    IC_FREE(q->service);
+    IC_FREE(q->uri);
+    IC_FREE(q->srv);
+    IC_FREE(q->cl_header);
+    IC_FREE(q->cl_data);
+    IC_FREE(q->srv_header);
+    IC_FREE(q->srv_data);
 }
 
 ic_query_int_t *ic_int_query(ic_query_t *q)
@@ -219,7 +231,7 @@ IC_EXPORT int ic_send_query(ic_query_t *q)
     return 0;
 }
 
-IC_EXPORT int ic_get_options(ic_query_t *q)
+IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
 {
     int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
@@ -228,22 +240,28 @@ IC_EXPORT int ic_get_options(ic_query_t *q)
         return -IC_ERR_QUERY_NULL;
     }
 
-    if (!icap->uri) {
-        if ((err = ic_create_uri(icap)) != 0) {
-            return err;
-        }
+    ic_query_clean(icap);
 
-        if ((err = ic_create_header(icap, IC_METHOD_OPTIONS)) != 0) {
-            return err;
-        }
+    icap->service = strdup(service);
 
-        icap->cl_data = strdup(icap->cl_header);
-        if (!icap->cl_data) {
-            return -IC_ERR_ENOMEM;
-        }
-
-        icap->cl_data_len = strlen(icap->cl_data);
+    if (!icap->service) {
+        return -IC_ERR_ENOMEM;
     }
+
+    if ((err = ic_create_uri(icap)) != 0) {
+        return err;
+    }
+
+    if ((err = ic_create_header(icap, IC_METHOD_OPTIONS)) != 0) {
+        return err;
+    }
+
+    icap->cl_data = strdup(icap->cl_header);
+    if (!icap->cl_data) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    icap->cl_data_len = strlen(icap->cl_data);
 
     if ((rc = ic_poll_icap(icap)) != 0) {
         return rc;
@@ -524,30 +542,6 @@ IC_EXPORT void ic_disconnect(ic_query_t *q)
     ic_query_int_t *icap = ic_int_query(q);
 
     close(icap->sd);
-}
-
-IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
-{
-    ic_query_int_t *icap = ic_int_query(q);
-
-    if (!icap) {
-        return -IC_ERR_QUERY_NULL;
-    }
-
-    if (icap->service) {
-        IC_FREE(icap->service);
-        IC_FREE(icap->uri);
-        IC_FREE(icap->cl_header);
-        IC_FREE(icap->cl_data);
-    }
-
-    icap->service = strdup(service);
-
-    if (!icap->service) {
-        return -IC_ERR_ENOMEM;
-    }
-
-    return 0;
 }
 
 IC_EXPORT const char *ic_get_icap_header(ic_query_t *q)
