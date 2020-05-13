@@ -12,6 +12,8 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 
+#include "../libicap.h"
+
 #include "ic_err.h"
 #include "ic_core.h"
 #include "ic_utils.h"
@@ -22,10 +24,6 @@ enum {
     IC_METHOD_ID_OPTS
 };
 
-typedef struct ic_query {
-    void *data;
-} ic_query_t;
-
 typedef struct ic_opts {
     uint32_t preview_len;
     unsigned int allow_204:1;
@@ -35,6 +33,7 @@ typedef struct ic_opts {
 
 typedef struct ic_query_int {
     int sd;
+    int type;
     uint32_t rc;
     uint16_t port;
     ic_opts_t opts_cl;
@@ -44,9 +43,9 @@ typedef struct ic_query_int {
     char *srv;
     char *service;
     char *uri;
-    char *cl_header;
+    char *cl_icap_header;
     char *cl_data;
-    char *srv_header;
+    char *srv_icap_header;
     char *srv_data;
 } ic_query_int_t;
 
@@ -109,21 +108,23 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->service);
     free(icap->uri);
     free(icap->srv);
-    free(icap->cl_header);
+    free(icap->cl_icap_header);
     free(icap->cl_data);
-    free(icap->srv_header);
+    free(icap->srv_icap_header);
     free(icap->srv_data);
     free(q->data);
 }
 
 void ic_query_clean(ic_query_int_t *q)
 {
+    q->cl_data_len = 0;
+    q->srv_data_len = 0;
     IC_FREE(q->service);
     IC_FREE(q->uri);
     IC_FREE(q->srv);
-    IC_FREE(q->cl_header);
+    IC_FREE(q->cl_icap_header);
     IC_FREE(q->cl_data);
-    IC_FREE(q->srv_header);
+    IC_FREE(q->srv_icap_header);
     IC_FREE(q->srv_data);
 }
 
@@ -226,11 +227,6 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
     return 0;
 }
 
-IC_EXPORT int ic_send_query(ic_query_t *q)
-{
-    return 0;
-}
-
 IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
 {
     int err, rc;
@@ -241,7 +237,6 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
     }
 
     ic_query_clean(icap);
-
     icap->service = strdup(service);
 
     if (!icap->service) {
@@ -256,7 +251,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return err;
     }
 
-    icap->cl_data = strdup(icap->cl_header);
+    icap->cl_data = strdup(icap->cl_icap_header);
     if (!icap->cl_data) {
         return -IC_ERR_ENOMEM;
     }
@@ -271,6 +266,11 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return rc;
     }
 
+    return 0;
+}
+
+IC_EXPORT int ic_send_respmod(ic_query_t *q, ic_data_t *resp)
+{
     return 0;
 }
 
@@ -297,15 +297,15 @@ int ic_parse_header(ic_query_int_t *q, int method)
         return -IC_ERR_HEADER_END;
     }
 
-    q->srv_header = calloc(1, len + 1);
-    if (!q->srv_header) {
+    q->srv_icap_header = calloc(1, len + 1);
+    if (!q->srv_icap_header) {
         return -IC_ERR_ENOMEM;
     }
 
-    memcpy(q->srv_header, q->srv_data, len);
+    memcpy(q->srv_icap_header, q->srv_data, len);
 
     /* Get ICAP status code */
-    if ((str = strstr(q->srv_header, IC_ICAP_ID)) != NULL) {
+    if ((str = strstr(q->srv_icap_header, IC_ICAP_ID)) != NULL) {
         char *start, *end;
         size_t space = 0;
 
@@ -358,7 +358,7 @@ int ic_parse_header(ic_query_int_t *q, int method)
     /* Get ICAP options */
     if (method == IC_METHOD_ID_OPTS) {
         /* RFC-3507: Field names are case-insensitive. */
-        if ((str = strcasestr(q->srv_header, "\nMethods: "))) {
+        if ((str = strcasestr(q->srv_icap_header, "\nMethods: "))) {
             if (strstr(str, "RESPMOD")) {
                 q->opts_srv.m_resp = 1;
             }
@@ -369,13 +369,13 @@ int ic_parse_header(ic_query_int_t *q, int method)
             return -IC_ERR_METHODS_NOT_FOUND;
         }
 
-        if ((str = strcasestr(q->srv_header, "\nAllow: "))) {
+        if ((str = strcasestr(q->srv_icap_header, "\nAllow: "))) {
             if (strstr(str, "204")) {
                 q->opts_srv.allow_204 = 1;
             }
         }
 
-        if ((str = strcasestr(q->srv_header, "\nPreview: "))) {
+        if ((str = strcasestr(q->srv_icap_header, "\nPreview: "))) {
             int rc;
             size_t plen;
             char *start, *end, *preview;
@@ -422,7 +422,7 @@ int ic_create_uri(ic_query_int_t *q)
 
 int ic_create_header(ic_query_int_t *q, const char *method)
 {
-    if (asprintf(&q->cl_header, "%s %s %s\r\n%s%s",
+    if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
                 method, q->uri, IC_ICAP_ID,
                 "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
         return -IC_ERR_ENOMEM;
@@ -552,7 +552,7 @@ IC_EXPORT const char *ic_get_icap_header(ic_query_t *q)
         return NULL;
     }
 
-    return icap->srv_header;
+    return icap->srv_icap_header;
 }
 
 IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)

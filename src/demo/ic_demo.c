@@ -15,7 +15,7 @@ int main(int argc, char **argv)
     const char *optstr = "s:p:n:f:h";
     const char *icap_hdr;
     char *server = NULL;
-    char *service = NULL;
+    char *path = NULL;
     ic_query_t q;
 
     static const struct option longopts[] = {
@@ -38,6 +38,13 @@ int main(int argc, char **argv)
             break;
         case 'p':
             port = atoi(optarg);
+            break;
+        case 'f':
+            path = strdup(optarg);
+            if (!path) {
+                fprintf(stderr, "Out of memory\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         case 'h':
             usage();
@@ -80,7 +87,10 @@ int main(int argc, char **argv)
         printf("%s\n", icap_hdr);
     }
 
-out1:
+    if (path) {
+        //...
+    }
+
     ic_disconnect(&q);
 out0:
     ic_query_deinit(&q);
