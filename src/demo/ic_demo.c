@@ -1,7 +1,12 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include <libicap.h>
 
@@ -16,6 +21,7 @@ int main(int argc, char **argv)
     const char *icap_hdr;
     char *server = NULL;
     char *path = NULL;
+    ic_data_t ctx;
     ic_query_t q;
 
     static const struct option longopts[] = {
@@ -55,17 +61,55 @@ int main(int argc, char **argv)
         }
     }
 
+    memset(&q, 0x0, sizeof(q));
+
     if (!server) {
         fprintf(stderr, "Server name|IP addr is not set\n");
         usage();
         exit(EXIT_FAILURE);
     }
 
+    if (path) {
+        struct stat info;
+        int fd, hdr_len;
+
+        memset(&ctx, 0, sizeof(ctx));
+        memset(&info, 0, sizeof(info));
+
+        if (stat(path, &info) == -1) {
+            fprintf(stderr, "Cannot open '%s': %s\n", path, strerror(errno));
+            goto out;
+        }
+
+        ctx.body_len = info.st_size;
+        if ((ctx.body = malloc(ctx.body_len)) == NULL) {
+            fprintf(stderr, "Out of memory\n");
+            goto out;
+        }
+
+        if ((fd = open(path, O_RDONLY)) == -1) {
+            fprintf(stderr, "Cannot open '%s': %s\n", path, strerror(errno));
+            goto out;
+        }
+
+        if (read(fd, ctx.body, ctx.body_len) == -1) {
+            fprintf(stderr, "Cannot read '%s': %s\n", path, strerror(errno));
+            goto out;
+        }
+
+        if ((hdr_len = asprintf(&ctx.hdr, "HTTP/1.1 200 OK\r\n\r\n")) == -1) {
+            fprintf(stderr, "Out of memory\n");
+            goto out;
+        }
+
+        ctx.hdr_len = hdr_len;
+
+        close(fd);
+    }
+
     if (!port) {
         port = 1344;
     }
-
-    memset(&q, 0x0, sizeof(q));
 
     if ((err = ic_query_init(&q)) < 0) {
         printf("%s\n", ic_strerror(err));
@@ -75,7 +119,7 @@ int main(int argc, char **argv)
     if ((err = ic_connect(&q, server, port)) < 0) {
         printf("%s\n", ic_strerror(err));
         rc = 1;
-        goto out0;
+        goto out;
     }
 
     if ((err = ic_get_options(&q, "echo")) < 0) {
@@ -92,9 +136,11 @@ int main(int argc, char **argv)
     }
 
     ic_disconnect(&q);
-out0:
+out:
     ic_query_deinit(&q);
+    free(ctx.body);
     free(server);
+    free(path);
 
     return rc;
 }

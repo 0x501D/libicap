@@ -14,8 +14,8 @@ typedef struct ic_query {
 typedef struct ic_query_data {
     size_t hdr_len;
     size_t body_len;
-    const char *hdr;
-    const char *body;
+    char *hdr;
+    char *body;
 } ic_data_t;
 
 int ic_query_init(ic_query_t *q);

@@ -1,0 +1,5 @@
+-x
+c
+-Wall
+-Wextra
+-Wformat-security

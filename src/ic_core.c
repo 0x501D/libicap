@@ -55,7 +55,7 @@ int ic_create_header(ic_query_int_t *q, const char *method);
 int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
-int ic_parse_header(ic_query_int_t *q, int method);
+int ic_parse_response(ic_query_int_t *q, int method);
 void ic_query_clean(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
@@ -121,7 +121,6 @@ void ic_query_clean(ic_query_int_t *q)
     q->srv_data_len = 0;
     IC_FREE(q->service);
     IC_FREE(q->uri);
-    IC_FREE(q->srv);
     IC_FREE(q->cl_icap_header);
     IC_FREE(q->cl_data);
     IC_FREE(q->srv_icap_header);
@@ -262,7 +261,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return rc;
     }
 
-    if ((rc = ic_parse_header(icap, IC_METHOD_ID_OPTS)) != 0) {
+    if ((rc = ic_parse_response(icap, IC_METHOD_ID_OPTS)) != 0) {
         return rc;
     }
 
@@ -274,7 +273,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q, ic_data_t *resp)
     return 0;
 }
 
-int ic_parse_header(ic_query_int_t *q, int method)
+int ic_parse_response(ic_query_int_t *q, int method)
 {
     size_t len = 0;
     int end_found = 0;
