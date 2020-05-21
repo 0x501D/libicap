@@ -16,6 +16,7 @@ typedef struct ic_query_data {
     size_t body_len;
     char *hdr;
     char *body;
+    char *service;
 } ic_data_t;
 
 int ic_query_init(ic_query_t *q);

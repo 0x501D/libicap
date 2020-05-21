@@ -51,7 +51,8 @@ typedef struct ic_query_int {
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
 int ic_create_uri(ic_query_int_t *q);
-int ic_create_header(ic_query_int_t *q, const char *method);
+int ic_create_header_opt(ic_query_int_t *q);
+int ic_create_header_resp(ic_query_int_t *q, const ic_data_t *resp);
 int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
@@ -246,7 +247,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return err;
     }
 
-    if ((err = ic_create_header(icap, IC_METHOD_OPTIONS)) != 0) {
+    if ((err = ic_create_header_opt(icap)) != 0) {
         return err;
     }
 
@@ -270,6 +271,39 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
 
 IC_EXPORT int ic_send_respmod(ic_query_t *q, ic_data_t *resp)
 {
+    int err, rc;
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    ic_query_clean(icap);
+    icap->service = strdup(resp->service);
+
+    if (!icap->service) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    if ((err = ic_create_uri(icap)) != 0) {
+        return err;
+    }
+
+    if ((err = ic_create_header_resp(icap, resp)) != 0) {
+        return err;
+    }
+
+    icap->cl_data_len = resp->body_len + resp->hdr_len;
+    if ((icap->cl_data = malloc(icap->cl_data_len)) == NULL) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    //.. copy data to icap->cl_data
+
+    if ((rc = ic_poll_icap(icap)) != 0) {
+        return rc;
+    }
+
     return 0;
 }
 
@@ -419,11 +453,23 @@ int ic_create_uri(ic_query_int_t *q)
     return 0;
 }
 
-int ic_create_header(ic_query_int_t *q, const char *method)
+int ic_create_header_opt(ic_query_int_t *q)
 {
     if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
-                method, q->uri, IC_ICAP_ID,
+                IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
                 "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    return 0;
+}
+
+int ic_create_header_resp(ic_query_int_t *q, const ic_data_t *resp)
+{
+    size_t hdr_len_count = ic_count_digit(resp->hdr_len);
+    if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%zu%s%s",
+                IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
+                "Encapsulated: req-hdr=0, res-hdr=", resp->hdr_len, " ", IC_RN_TWICE) == -1) {
         return -IC_ERR_ENOMEM;
     }
 

@@ -20,9 +20,13 @@ int main(int argc, char **argv)
     const char *optstr = "s:p:n:f:h";
     const char *icap_hdr;
     char *server = NULL;
+    char *service = NULL;
     char *path = NULL;
     ic_data_t ctx;
     ic_query_t q;
+
+    memset(&ctx, 0, sizeof(ctx));
+    memset(&q, 0x0, sizeof(q));
 
     static const struct option longopts[] = {
         { "server", required_argument, NULL, 's' },
@@ -38,6 +42,13 @@ int main(int argc, char **argv)
         case 's':
             server = strdup(optarg);
             if (!server) {
+                fprintf(stderr, "Out of memory\n");
+                exit(EXIT_FAILURE);
+            }
+            break;
+        case 'n':
+            service = strdup(optarg);
+            if (!service) {
                 fprintf(stderr, "Out of memory\n");
                 exit(EXIT_FAILURE);
             }
@@ -61,8 +72,6 @@ int main(int argc, char **argv)
         }
     }
 
-    memset(&q, 0x0, sizeof(q));
-
     if (!server) {
         fprintf(stderr, "Server name|IP addr is not set\n");
         usage();
@@ -73,7 +82,13 @@ int main(int argc, char **argv)
         struct stat info;
         int fd, hdr_len;
 
-        memset(&ctx, 0, sizeof(ctx));
+        if (!service) {
+            fprintf(stderr, "ICAP service is not set\n");
+            goto out;
+        }
+
+        ctx.service = service;
+
         memset(&info, 0, sizeof(info));
 
         if (stat(path, &info) == -1) {
@@ -101,8 +116,13 @@ int main(int argc, char **argv)
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
+            printf("%d\n", hdr_len);
 
         ctx.hdr_len = hdr_len;
+
+        if (ic_send_respmod(&q, &ctx) != 0) {
+            //...
+        }
 
         close(fd);
     }
@@ -140,6 +160,7 @@ out:
     ic_query_deinit(&q);
     free(ctx.body);
     free(server);
+    free(service);
     free(path);
 
     return rc;

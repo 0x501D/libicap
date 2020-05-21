@@ -28,3 +28,19 @@ int ic_strtoui(const char *s, uint32_t *res, int base)
 
     return 0;
 }
+
+size_t ic_count_digit(size_t n)
+{
+    size_t res = 0;
+
+    if (!n) {
+        return 1;
+    }
+
+    while (n) {
+        n /= 10;
+        res++;
+    }
+
+    return res;
+}
