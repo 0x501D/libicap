@@ -47,6 +47,7 @@ typedef struct ic_query_int {
     char *cl_data;
     char *srv_icap_header;
     char *srv_data;
+    unsigned int hdr_sent:1;
 } ic_query_int_t;
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
@@ -464,6 +465,14 @@ int ic_create_header_opt(ic_query_int_t *q)
     return 0;
 }
 
+/* RFC-3507 The "Encapsulated" Header:
+ * REQMOD request encapsulated_list: [reqhdr] reqbody
+ * REQMOD response encapsulated_list: {[reqhdr] reqbody} |
+ * {[reshdr] resbody}
+ * RESPMOD request encapsulated_list: [reqhdr] [reshdr] resbody
+ * RESPMOD response encapsulated_list: [reshdr] resbody
+ * OPTIONS response encapsulated_list: optbody
+ */
 int ic_create_header_resp(ic_query_int_t *q, const ic_data_t *resp)
 {
     size_t hdr_len_count = ic_count_digit(resp->hdr_len);
@@ -489,6 +498,7 @@ int ic_poll_icap(ic_query_int_t *q)
         FD_ZERO(&rset);
         FD_ZERO(&wset);
         FD_SET(q->sd, &rset);
+
         if (!send_done) {
             wset = rset;
         };
