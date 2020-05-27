@@ -31,6 +31,16 @@ typedef struct ic_opts {
     unsigned int m_req:1;
 } ic_opts_t;
 
+typedef struct ic_ctx {
+    size_t hdr_len;
+    size_t body_len;
+    size_t icap_hdr_len;
+    char *icap_hdr;
+    char *hdr;
+    char *body;
+    char *service;
+} ic_ctx_t;
+
 typedef struct ic_query_int {
     int sd;
     int type;
@@ -38,6 +48,7 @@ typedef struct ic_query_int {
     uint16_t port;
     ic_opts_t opts_cl;
     ic_opts_t opts_srv;
+    ic_ctx_t ctx;
     size_t cl_data_len;
     size_t srv_data_len;
     char *srv;
@@ -48,12 +59,13 @@ typedef struct ic_query_int {
     char *srv_icap_header;
     char *srv_data;
     unsigned int hdr_sent:1;
+    unsigned int preview_mode:1;
 } ic_query_int_t;
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
 int ic_create_uri(ic_query_int_t *q);
 int ic_create_header_opt(ic_query_int_t *q);
-int ic_create_header_resp(ic_query_int_t *q, const ic_data_t *resp);
+int ic_create_header_resp(ic_query_int_t *q);
 int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
@@ -270,7 +282,25 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
     return 0;
 }
 
-IC_EXPORT int ic_send_respmod(ic_query_t *q, ic_data_t *resp)
+IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    ic_query_clean(icap);
+    icap->service = strdup(service);
+
+    if (!icap->service) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    return 0;
+}
+
+IC_EXPORT int ic_send_respmod(ic_query_t *q)
 {
     int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
@@ -279,17 +309,10 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q, ic_data_t *resp)
         return -IC_ERR_QUERY_NULL;
     }
 
-    ic_query_clean(icap);
-    icap->service = strdup(resp->service);
-
-    if (!icap->service) {
-        return -IC_ERR_ENOMEM;
-    }
-
     if ((err = ic_create_uri(icap)) != 0) {
         return err;
     }
-
+#if 0
     if ((err = ic_create_header_resp(icap, resp)) != 0) {
         return err;
     }
@@ -304,7 +327,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q, ic_data_t *resp)
     if ((rc = ic_poll_icap(icap)) != 0) {
         return rc;
     }
-
+#endif
     return 0;
 }
 
@@ -473,14 +496,16 @@ int ic_create_header_opt(ic_query_int_t *q)
  * RESPMOD response encapsulated_list: [reshdr] resbody
  * OPTIONS response encapsulated_list: optbody
  */
-int ic_create_header_resp(ic_query_int_t *q, const ic_data_t *resp)
+int ic_create_header_resp(ic_query_int_t *q)
 {
+#if 0
     size_t hdr_len_count = ic_count_digit(resp->hdr_len);
     if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%zu%s%s",
                 IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
                 "Encapsulated: req-hdr=0, res-hdr=", resp->hdr_len, " ", IC_RN_TWICE) == -1) {
         return -IC_ERR_ENOMEM;
     }
+#endif
 
     return 0;
 }

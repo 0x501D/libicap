@@ -22,10 +22,8 @@ int main(int argc, char **argv)
     char *server = NULL;
     char *service = NULL;
     char *path = NULL;
-    ic_data_t ctx;
     ic_query_t q;
 
-    memset(&ctx, 0, sizeof(ctx));
     memset(&q, 0x0, sizeof(q));
 
     static const struct option longopts[] = {
@@ -86,8 +84,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "ICAP service is not set\n");
             goto out;
         }
-
+#if 0
         ctx.service = service;
+        if (ic_set_service(&q, service) != 0) {
+            fprintf(stderr, "Cannot set service\n");
+            goto out;
+        }
 
         memset(&info, 0, sizeof(info));
 
@@ -123,7 +125,7 @@ int main(int argc, char **argv)
         if (ic_send_respmod(&q, &ctx) != 0) {
             //...
         }
-
+#endif
         close(fd);
     }
 
@@ -158,7 +160,6 @@ int main(int argc, char **argv)
     ic_disconnect(&q);
 out:
     ic_query_deinit(&q);
-    free(ctx.body);
     free(server);
     free(service);
     free(path);
