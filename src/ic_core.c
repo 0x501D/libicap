@@ -1,4 +1,4 @@
-#define _GNU_SOURCE /* asprintf(3) */
+#define _GNU_SOURCE /* asprintf(3), memmem(3) */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -18,11 +18,11 @@
 #include "ic_core.h"
 #include "ic_utils.h"
 
-enum {
-    IC_METHOD_ID_REQ,
-    IC_METHOD_ID_RESP,
-    IC_METHOD_ID_OPTS
-};
+typedef enum ic_method {
+    IC_METHOD_ID_REQ,    /* REQMOD - for Request Modification      */
+    IC_METHOD_ID_RESP,   /* RESPMOD - for Response Modification    */
+    IC_METHOD_ID_OPTS    /* OPTIONS - to learn about configuration */
+} ic_method_t;
 
 typedef struct ic_opts {
     uint32_t preview_len;
@@ -32,18 +32,18 @@ typedef struct ic_opts {
 } ic_opts_t;
 
 typedef struct ic_ctx {
-    size_t hdr_len;
+    ic_ctx_type_t type;
+    size_t req_hdr_len;
+    size_t resp_hdr_len;
     size_t body_len;
-    size_t icap_hdr_len;
-    char *icap_hdr;
-    char *hdr;
-    char *body;
-    char *service;
+    unsigned char *req_hdr;
+    unsigned char *resp_hdr;
+    const unsigned char *body;
 } ic_ctx_t;
 
 typedef struct ic_query_int {
     int sd;
-    int type;
+    ic_method_t method;
     uint32_t rc;
     uint16_t port;
     ic_opts_t opts_cl;
@@ -64,12 +64,12 @@ typedef struct ic_query_int {
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
 int ic_create_uri(ic_query_int_t *q);
-int ic_create_header_opt(ic_query_int_t *q);
-int ic_create_header_resp(ic_query_int_t *q);
+int ic_create_header(ic_query_int_t *q, ic_method_t method);
 int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
 int ic_parse_response(ic_query_int_t *q, int method);
+ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q);
 void ic_query_clean(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
@@ -92,6 +92,7 @@ IC_EXPORT const char *ic_err_msg[] = {
     "ICAP/1.0 400 Bad request",
     "Bad header in server response",
     "Internal error: null pointer",
+    "Null pointer",
     "Integer overflow",
     "Bad integer value",
     "Cannot get status code from server response",
@@ -260,7 +261,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return err;
     }
 
-    if ((err = ic_create_header_opt(icap)) != 0) {
+    if ((err = ic_create_header(icap, IC_METHOD_ID_OPTS)) != 0) {
         return err;
     }
 
@@ -300,6 +301,92 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
     return 0;
 }
 
+IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
+        size_t len)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    if (!hdr) {
+        return -IC_ERR_NULL_POINTER;
+    }
+
+    icap->ctx.req_hdr = malloc(len);
+    if (!icap->ctx.req_hdr) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    memcpy(icap->ctx.req_hdr, hdr, len);
+    icap->ctx.req_hdr_len = len;
+
+    return 0;
+}
+
+ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q)
+{
+    const char *cl = "\nContent-Length: ";
+    const char *te = "\nTransfer-Encoding: chunked";
+
+    if (memmem(q->ctx.resp_hdr, q->ctx.resp_hdr_len, cl, strlen(cl))) {
+        return IC_CTX_TYPE_CL;
+    }
+
+    if (memmem(q->ctx.resp_hdr, q->ctx.resp_hdr_len, te, strlen(te))) {
+        return IC_CTX_TYPE_CHUNKED;
+    }
+
+    return IC_CTX_TYPE_CLOSE;
+}
+
+IC_EXPORT int ic_set_resp_hdr(ic_query_t *q, const unsigned char *hdr,
+        size_t len, ic_ctx_type_t *type)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+    ic_ctx_type_t t;
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    if (!hdr || !type) {
+        return -IC_ERR_NULL_POINTER;
+    }
+
+    icap->ctx.resp_hdr = malloc(len);
+    if (!icap->ctx.resp_hdr) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    memcpy(icap->ctx.resp_hdr, hdr, len);
+    icap->ctx.resp_hdr_len = len;
+    *type = ic_get_resp_ctx_type(icap);
+
+    return 0;
+}
+
+IC_EXPORT int ic_set_resp_body(ic_query_t *q, const unsigned char *body,
+        size_t len)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    if (!body) {
+        return -IC_ERR_NULL_POINTER;
+    }
+
+    /* for memory saving just copy body pointer */
+    icap->ctx.body = body;
+    icap->ctx.body_len = len;
+
+    return 0;
+}
+
 IC_EXPORT int ic_send_respmod(ic_query_t *q)
 {
     int err, rc;
@@ -312,10 +399,11 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     if ((err = ic_create_uri(icap)) != 0) {
         return err;
     }
-#if 0
-    if ((err = ic_create_header_resp(icap, resp)) != 0) {
+
+    if ((err = ic_create_header(icap, IC_METHOD_ID_RESP)) != 0) {
         return err;
     }
+#if 0
 
     icap->cl_data_len = resp->body_len + resp->hdr_len;
     if ((icap->cl_data = malloc(icap->cl_data_len)) == NULL) {
@@ -477,17 +565,6 @@ int ic_create_uri(ic_query_int_t *q)
     return 0;
 }
 
-int ic_create_header_opt(ic_query_int_t *q)
-{
-    if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
-                IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
-                "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
-        return -IC_ERR_ENOMEM;
-    }
-
-    return 0;
-}
-
 /* RFC-3507 The "Encapsulated" Header:
  * REQMOD request encapsulated_list: [reqhdr] reqbody
  * REQMOD response encapsulated_list: {[reqhdr] reqbody} |
@@ -496,16 +573,35 @@ int ic_create_header_opt(ic_query_int_t *q)
  * RESPMOD response encapsulated_list: [reshdr] resbody
  * OPTIONS response encapsulated_list: optbody
  */
-int ic_create_header_resp(ic_query_int_t *q)
+int ic_create_header(ic_query_int_t *q, ic_method_t method)
 {
-#if 0
-    size_t hdr_len_count = ic_count_digit(resp->hdr_len);
-    if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%zu%s%s",
-                IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
-                "Encapsulated: req-hdr=0, res-hdr=", resp->hdr_len, " ", IC_RN_TWICE) == -1) {
-        return -IC_ERR_ENOMEM;
+    switch (method) {
+
+    case IC_METHOD_ID_OPTS:
+        if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
+                    IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
+                    "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
+            return -IC_ERR_ENOMEM;
+        }
+        break;
+
+    case IC_METHOD_ID_RESP:
+        {
+            char *enca;
+
+            if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
+                        IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
+                        "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            free(enca);
+        }
+        break;
+
+    case IC_METHOD_ID_REQ:
+        break;
     }
-#endif
 
     return 0;
 }

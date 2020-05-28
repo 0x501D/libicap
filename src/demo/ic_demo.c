@@ -14,11 +14,14 @@ void usage();
 
 int main(int argc, char **argv)
 {
-    int err, rc = 0;
+    int err, rc = 0, fd = -1;
     int opt;
     uint16_t port = 0;
     const char *optstr = "s:p:n:f:h";
     const char *icap_hdr;
+    unsigned char *body = NULL;
+    unsigned char *resp_hdr = NULL;
+    ic_ctx_type_t resp_type = 0;
     char *server = NULL;
     char *service = NULL;
     char *path = NULL;
@@ -76,16 +79,21 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+    if ((err = ic_query_init(&q)) < 0) {
+        printf("%s\n", ic_strerror(err));
+        exit(1);
+    }
+
     if (path) {
         struct stat info;
-        int fd, hdr_len;
+        int hdr_len;
+        size_t body_len;
 
         if (!service) {
             fprintf(stderr, "ICAP service is not set\n");
             goto out;
         }
-#if 0
-        ctx.service = service;
+
         if (ic_set_service(&q, service) != 0) {
             fprintf(stderr, "Cannot set service\n");
             goto out;
@@ -98,8 +106,8 @@ int main(int argc, char **argv)
             goto out;
         }
 
-        ctx.body_len = info.st_size;
-        if ((ctx.body = malloc(ctx.body_len)) == NULL) {
+        body_len = info.st_size;
+        if ((body = malloc(body_len)) == NULL) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
@@ -109,33 +117,28 @@ int main(int argc, char **argv)
             goto out;
         }
 
-        if (read(fd, ctx.body, ctx.body_len) == -1) {
+        if (read(fd, body, body_len) == -1) {
             fprintf(stderr, "Cannot read '%s': %s\n", path, strerror(errno));
             goto out;
         }
 
-        if ((hdr_len = asprintf(&ctx.hdr, "HTTP/1.1 200 OK\r\n\r\n")) == -1) {
+        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
+                        "Content-Length: %zu\r\n\r\n", body_len)) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
-            printf("%d\n", hdr_len);
 
-        ctx.hdr_len = hdr_len;
-
-        if (ic_send_respmod(&q, &ctx) != 0) {
-            //...
+        if ((err = ic_set_resp_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
+            printf("%s\n", ic_strerror(err));
+            goto out;
         }
-#endif
+
         close(fd);
+        fd = -1;
     }
 
     if (!port) {
         port = 1344;
-    }
-
-    if ((err = ic_query_init(&q)) < 0) {
-        printf("%s\n", ic_strerror(err));
-        exit(1);
     }
 
     if ((err = ic_connect(&q, server, port)) < 0) {
@@ -159,10 +162,15 @@ int main(int argc, char **argv)
 
     ic_disconnect(&q);
 out:
+    if (fd != -1) {
+        close(fd);
+    }
     ic_query_deinit(&q);
     free(server);
     free(service);
     free(path);
+    free(body);
+    free(resp_hdr);
 
     return rc;
 }
