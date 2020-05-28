@@ -34,10 +34,10 @@ typedef struct ic_opts {
 typedef struct ic_ctx {
     ic_ctx_type_t type;
     size_t req_hdr_len;
-    size_t resp_hdr_len;
+    size_t res_hdr_len;
     size_t body_len;
     unsigned char *req_hdr;
-    unsigned char *resp_hdr;
+    unsigned char *res_hdr;
     const unsigned char *body;
 } ic_ctx_t;
 
@@ -51,12 +51,13 @@ typedef struct ic_query_int {
     ic_ctx_t ctx;
     size_t cl_data_len;
     size_t srv_data_len;
+    int cl_icap_hdr_len;
     char *srv;
     char *service;
     char *uri;
-    char *cl_icap_header;
+    char *cl_icap_hdr;
     char *cl_data;
-    char *srv_icap_header;
+    char *srv_icap_hdr;
     char *srv_data;
     unsigned int hdr_sent:1;
     unsigned int preview_mode:1;
@@ -92,6 +93,8 @@ IC_EXPORT const char *ic_err_msg[] = {
     "ICAP/1.0 400 Bad request",
     "Bad header in server response",
     "Internal error: null pointer",
+    "Internal error: invalid length",
+    "Internal error: integer overflow",
     "Null pointer",
     "Integer overflow",
     "Bad integer value",
@@ -123,9 +126,9 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->service);
     free(icap->uri);
     free(icap->srv);
-    free(icap->cl_icap_header);
+    free(icap->cl_icap_hdr);
     free(icap->cl_data);
-    free(icap->srv_icap_header);
+    free(icap->srv_icap_hdr);
     free(icap->srv_data);
     free(q->data);
 }
@@ -136,9 +139,9 @@ void ic_query_clean(ic_query_int_t *q)
     q->srv_data_len = 0;
     IC_FREE(q->service);
     IC_FREE(q->uri);
-    IC_FREE(q->cl_icap_header);
+    IC_FREE(q->cl_icap_hdr);
     IC_FREE(q->cl_data);
-    IC_FREE(q->srv_icap_header);
+    IC_FREE(q->srv_icap_hdr);
     IC_FREE(q->srv_data);
 }
 
@@ -265,12 +268,12 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return err;
     }
 
-    icap->cl_data = strdup(icap->cl_icap_header);
+    icap->cl_data = strdup(icap->cl_icap_hdr);
     if (!icap->cl_data) {
         return -IC_ERR_ENOMEM;
     }
 
-    icap->cl_data_len = strlen(icap->cl_data);
+    icap->cl_data_len = icap->cl_icap_hdr_len;
 
     if ((rc = ic_poll_icap(icap)) != 0) {
         return rc;
@@ -330,22 +333,21 @@ ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q)
     const char *cl = "\nContent-Length: ";
     const char *te = "\nTransfer-Encoding: chunked";
 
-    if (memmem(q->ctx.resp_hdr, q->ctx.resp_hdr_len, cl, strlen(cl))) {
+    if (memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, cl, strlen(cl))) {
         return IC_CTX_TYPE_CL;
     }
 
-    if (memmem(q->ctx.resp_hdr, q->ctx.resp_hdr_len, te, strlen(te))) {
+    if (memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, te, strlen(te))) {
         return IC_CTX_TYPE_CHUNKED;
     }
 
     return IC_CTX_TYPE_CLOSE;
 }
 
-IC_EXPORT int ic_set_resp_hdr(ic_query_t *q, const unsigned char *hdr,
+IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         size_t len, ic_ctx_type_t *type)
 {
     ic_query_int_t *icap = ic_int_query(q);
-    ic_ctx_type_t t;
 
     if (!icap) {
         return -IC_ERR_QUERY_NULL;
@@ -355,19 +357,19 @@ IC_EXPORT int ic_set_resp_hdr(ic_query_t *q, const unsigned char *hdr,
         return -IC_ERR_NULL_POINTER;
     }
 
-    icap->ctx.resp_hdr = malloc(len);
-    if (!icap->ctx.resp_hdr) {
+    icap->ctx.res_hdr = malloc(len);
+    if (!icap->ctx.res_hdr) {
         return -IC_ERR_ENOMEM;
     }
 
-    memcpy(icap->ctx.resp_hdr, hdr, len);
-    icap->ctx.resp_hdr_len = len;
-    *type = ic_get_resp_ctx_type(icap);
+    memcpy(icap->ctx.res_hdr, hdr, len);
+    icap->ctx.res_hdr_len = len;
+    icap->ctx.type = *type = ic_get_resp_ctx_type(icap);
 
     return 0;
 }
 
-IC_EXPORT int ic_set_resp_body(ic_query_t *q, const unsigned char *body,
+IC_EXPORT int ic_set_body(ic_query_t *q, const unsigned char *body,
         size_t len)
 {
     ic_query_int_t *icap = ic_int_query(q);
@@ -442,15 +444,15 @@ int ic_parse_response(ic_query_int_t *q, int method)
         return -IC_ERR_HEADER_END;
     }
 
-    q->srv_icap_header = calloc(1, len + 1);
-    if (!q->srv_icap_header) {
+    q->srv_icap_hdr = calloc(1, len + 1);
+    if (!q->srv_icap_hdr) {
         return -IC_ERR_ENOMEM;
     }
 
-    memcpy(q->srv_icap_header, q->srv_data, len);
+    memcpy(q->srv_icap_hdr, q->srv_data, len);
 
     /* Get ICAP status code */
-    if ((str = strstr(q->srv_icap_header, IC_ICAP_ID)) != NULL) {
+    if ((str = strstr(q->srv_icap_hdr, IC_ICAP_ID)) != NULL) {
         char *start, *end;
         size_t space = 0;
 
@@ -503,7 +505,7 @@ int ic_parse_response(ic_query_int_t *q, int method)
     /* Get ICAP options */
     if (method == IC_METHOD_ID_OPTS) {
         /* RFC-3507: Field names are case-insensitive. */
-        if ((str = strcasestr(q->srv_icap_header, "\nMethods: "))) {
+        if ((str = strcasestr(q->srv_icap_hdr, "\nMethods: "))) {
             if (strstr(str, "RESPMOD")) {
                 q->opts_srv.m_resp = 1;
             }
@@ -514,13 +516,13 @@ int ic_parse_response(ic_query_int_t *q, int method)
             return -IC_ERR_METHODS_NOT_FOUND;
         }
 
-        if ((str = strcasestr(q->srv_icap_header, "\nAllow: "))) {
+        if ((str = strcasestr(q->srv_icap_hdr, "\nAllow: "))) {
             if (strstr(str, "204")) {
                 q->opts_srv.allow_204 = 1;
             }
         }
 
-        if ((str = strcasestr(q->srv_icap_header, "\nPreview: "))) {
+        if ((str = strcasestr(q->srv_icap_hdr, "\nPreview: "))) {
             int rc;
             size_t plen;
             char *start, *end, *preview;
@@ -578,24 +580,51 @@ int ic_create_header(ic_query_int_t *q, ic_method_t method)
     switch (method) {
 
     case IC_METHOD_ID_OPTS:
-        if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
+        if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",
                     IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
-                    "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
+                    "Encapsulated: null-body=0", IC_RN_TWICE)) == -1) {
             return -IC_ERR_ENOMEM;
         }
         break;
 
     case IC_METHOD_ID_RESP:
         {
-            char *enca;
+            ic_str_t enca;
 
-            if (asprintf(&q->cl_icap_header, "%s %s %s\r\n%s%s",
-                        IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
-                        "Encapsulated: null-body=0", IC_RN_TWICE) == -1) {
+            memset(&enca, 0, sizeof(enca));
+
+            if (q->ctx.req_hdr_len) { /* begin: request header exists */
+                ic_str_format_cat(&enca, "Encapsulated: req-hdr=0");
+                if (q->ctx.res_hdr_len) {
+                    ic_str_format_cat(&enca, ", res-hdr=%zu", q->ctx.req_hdr_len);
+                    if (q->ctx.body_len) {
+                        ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                    } else {
+                        ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                    }
+                } else {
+                    ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.req_hdr_len);
+                }
+            } else if (q->ctx.res_hdr_len) { /* begin: response header exists */
+                ic_str_format_cat(&enca, "Encapsulated: res-hdr=0");
+                if (q->ctx.body_len) {
+                    ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                } else {
+                    ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                }
+            } else { /* only body exists */
+                ic_str_format_cat(&enca, "Encapsulated: res-body=0");
+            }
+
+            if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",
+                        IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
+                        enca.data, IC_RN_TWICE)) == -1) {
                 return -IC_ERR_ENOMEM;
             }
 
-            free(enca);
+            printf("'%s'\n", q->cl_icap_hdr);
+
+            ic_str_free(&enca);
         }
         break;
 
@@ -728,7 +757,7 @@ IC_EXPORT const char *ic_get_icap_header(ic_query_t *q)
         return NULL;
     }
 
-    return icap->srv_icap_header;
+    return icap->srv_icap_hdr;
 }
 
 IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)

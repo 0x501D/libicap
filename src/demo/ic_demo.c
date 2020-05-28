@@ -128,7 +128,12 @@ int main(int argc, char **argv)
             goto out;
         }
 
-        if ((err = ic_set_resp_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
+        if ((err = ic_set_res_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
+            printf("%s\n", ic_strerror(err));
+            goto out;
+        }
+
+        if ((err = ic_set_body(&q, body, body_len)) == -1) {
             printf("%s\n", ic_strerror(err));
             goto out;
         }
@@ -157,7 +162,7 @@ int main(int argc, char **argv)
     }
 
     if (path) {
-        //...
+        ic_send_respmod(&q);
     }
 
     ic_disconnect(&q);
