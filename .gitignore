@@ -2,3 +2,4 @@ libicap.so
 ic_demo
 *.o
 *.d
+tags
