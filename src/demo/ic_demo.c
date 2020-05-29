@@ -84,6 +84,25 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    if (!port) {
+        port = 1344;
+    }
+
+    if ((err = ic_connect(&q, server, port)) < 0) {
+        printf("%s\n", ic_strerror(err));
+        rc = 1;
+        goto out;
+    }
+
+    if ((err = ic_get_options(&q, "echo")) < 0) {
+        printf("%s\n", ic_strerror(err));
+    }
+
+    icap_hdr = ic_get_icap_header(&q);
+    if (icap_hdr) {
+        printf("%s\n", icap_hdr);
+    }
+
     if (path) {
         struct stat info;
         int hdr_len;
@@ -138,31 +157,10 @@ int main(int argc, char **argv)
             goto out;
         }
 
+        ic_send_respmod(&q);
+
         close(fd);
         fd = -1;
-    }
-
-    if (!port) {
-        port = 1344;
-    }
-
-    if ((err = ic_connect(&q, server, port)) < 0) {
-        printf("%s\n", ic_strerror(err));
-        rc = 1;
-        goto out;
-    }
-
-    if ((err = ic_get_options(&q, "echo")) < 0) {
-        printf("%s\n", ic_strerror(err));
-    }
-
-    icap_hdr = ic_get_icap_header(&q);
-    if (icap_hdr) {
-        printf("%s\n", icap_hdr);
-    }
-
-    if (path) {
-        ic_send_respmod(&q);
     }
 
     ic_disconnect(&q);

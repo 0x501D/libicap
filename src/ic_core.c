@@ -36,6 +36,7 @@ typedef struct ic_ctx {
     size_t req_hdr_len;
     size_t res_hdr_len;
     size_t body_len;
+    uint32_t content_len;
     unsigned char *req_hdr;
     unsigned char *res_hdr;
     const unsigned char *body;
@@ -65,7 +66,7 @@ typedef struct ic_query_int {
 
 ic_query_int_t *ic_int_query(ic_query_t *q);
 int ic_create_uri(ic_query_int_t *q);
-int ic_create_header(ic_query_int_t *q, ic_method_t method);
+int ic_create_header(ic_query_int_t *q);
 int ic_poll_icap(ic_query_int_t *q);
 int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
@@ -255,6 +256,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
 
     ic_query_clean(icap);
     icap->service = strdup(service);
+    icap->method = IC_METHOD_ID_OPTS;
 
     if (!icap->service) {
         return -IC_ERR_ENOMEM;
@@ -264,7 +266,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return err;
     }
 
-    if ((err = ic_create_header(icap, IC_METHOD_ID_OPTS)) != 0) {
+    if ((err = ic_create_header(icap)) != 0) {
         return err;
     }
 
@@ -332,8 +334,45 @@ ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q)
 {
     const char *cl = "\nContent-Length: ";
     const char *te = "\nTransfer-Encoding: chunked";
+    void *clp = NULL;
 
-    if (memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, cl, strlen(cl))) {
+    clp = memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, cl, strlen(cl));
+    if (clp) {
+        /* Get Content-Length value */
+        int rc = 0;
+        char *p = (char *) clp;
+        size_t cl_buf_len = 0;
+        size_t cl_offset = (unsigned char *) clp - q->ctx.res_hdr;
+        size_t cl_rest = q->ctx.res_hdr_len - cl_offset;
+        char *cl_buf;
+        char *start = NULL, *end = NULL;
+
+        for (size_t n = 0; n < cl_rest; n++, p++) {
+            char ch = *p;
+
+            if (ch == 0x20) {
+                start = p + 1;
+            }
+
+            if (ch == 0xd) {
+                end = p;
+                cl_buf_len = end - start;
+
+                if ((cl_buf = calloc(1, cl_buf_len + 1)) == NULL) {
+                    return -IC_ERR_ENOMEM;
+                }
+
+                memcpy(cl_buf, start, cl_buf_len);
+                if ((rc = ic_strtoui(cl_buf, &q->ctx.content_len, 10)) != 0) {
+                    free(cl_buf);
+                    return rc;
+                }
+
+                free(cl_buf);
+                break;
+            }
+        }
+
         return IC_CTX_TYPE_CL;
     }
 
@@ -393,31 +432,83 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
 {
     int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
+    char *p = NULL;
+    ic_str_t hex;
+
+    memset(&hex, 0, sizeof(hex));
 
     if (!icap) {
         return -IC_ERR_QUERY_NULL;
     }
 
+    icap->method = IC_METHOD_ID_RESP;
+
     if ((err = ic_create_uri(icap)) != 0) {
         return err;
     }
 
-    if ((err = ic_create_header(icap, IC_METHOD_ID_RESP)) != 0) {
+    if ((err = ic_create_header(icap)) != 0) {
         return err;
     }
-#if 0
 
-    icap->cl_data_len = resp->body_len + resp->hdr_len;
+    if (!icap->hdr_sent) {
+        icap->cl_data_len = icap->cl_icap_hdr_len;
+    }
+    icap->cl_data_len += icap->ctx.req_hdr_len +
+        icap->ctx.res_hdr_len + icap->ctx.body_len;
+
+    if (icap->ctx.type == IC_CTX_TYPE_CL) {
+        size_t chunk_len = 0;
+        int rc;
+
+        if ((rc = ic_str_format_cat(&hex, "%x\r\n", icap->ctx.content_len)) != 0) {
+            return rc;
+        }
+
+        chunk_len += hex.len; /* <HEX>\r\n  chunk start */
+        chunk_len += 7;       /* \r\n0\r\n\r\n chunk end */
+        icap->cl_data_len += chunk_len;
+    }
+
     if ((icap->cl_data = malloc(icap->cl_data_len)) == NULL) {
         return -IC_ERR_ENOMEM;
     }
 
-    //.. copy data to icap->cl_data
+    p = icap->cl_data;
+
+    if (!icap->hdr_sent) {
+        memcpy(p, icap->cl_icap_hdr, icap->cl_icap_hdr_len);
+        p += icap->cl_icap_hdr_len;
+    }
+
+    if (icap->ctx.type == IC_CTX_TYPE_CL) {
+        if (icap->ctx.req_hdr_len) {
+            memcpy(p, icap->ctx.req_hdr, icap->ctx.req_hdr_len);
+            p += icap->ctx.req_hdr_len;
+        }
+
+        if (icap->ctx.res_hdr_len) {
+            memcpy(p, icap->ctx.res_hdr, icap->ctx.res_hdr_len);
+            p += icap->ctx.res_hdr_len;
+        }
+
+        if (icap->ctx.body_len) {
+            memcpy(p, hex.data, hex.len);
+            p += hex.len;
+
+            memcpy(p, icap->ctx.body, icap->ctx.body_len);
+            p += icap->ctx.body_len;
+
+            memcpy(p, IC_CRLF IC_CHUNK_IEOF, 7);
+        }
+    }
 
     if ((rc = ic_poll_icap(icap)) != 0) {
         return rc;
     }
-#endif
+
+    ic_str_free(&hex);
+
     return 0;
 }
 
@@ -575,9 +666,9 @@ int ic_create_uri(ic_query_int_t *q)
  * RESPMOD response encapsulated_list: [reshdr] resbody
  * OPTIONS response encapsulated_list: optbody
  */
-int ic_create_header(ic_query_int_t *q, ic_method_t method)
+int ic_create_header(ic_query_int_t *q)
 {
-    switch (method) {
+    switch (q->method) {
 
     case IC_METHOD_ID_OPTS:
         if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",
@@ -593,27 +684,37 @@ int ic_create_header(ic_query_int_t *q, ic_method_t method)
 
             memset(&enca, 0, sizeof(enca));
 
-            if (q->ctx.req_hdr_len) { /* begin: request header exists */
+            if (q->ctx.req_hdr_len) { /* req hdr exists */
                 ic_str_format_cat(&enca, "Encapsulated: req-hdr=0");
-                if (q->ctx.res_hdr_len) {
+                if (q->ctx.res_hdr_len) { /* res hdr exists */
                     ic_str_format_cat(&enca, ", res-hdr=%zu", q->ctx.req_hdr_len);
-                    if (q->ctx.body_len) {
+                    if (q->ctx.body_len) { /* body exists */
                         ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
-                    } else {
+                    } else { /*no body */
                         ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
                     }
-                } else {
-                    ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.req_hdr_len);
+                } else { /* no res hdr */
+                    if (q->ctx.body_len) { /* body exists */
+                        ic_str_format_cat(&enca, ", res-body=0");
+                    } else { /*no body */
+                        ic_str_format_cat(&enca, ", null-body=0");
+                    }
                 }
-            } else if (q->ctx.res_hdr_len) { /* begin: response header exists */
-                ic_str_format_cat(&enca, "Encapsulated: res-hdr=0");
-                if (q->ctx.body_len) {
-                    ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
-                } else {
-                    ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+            } else { /* no req hrd */
+                if (q->ctx.res_hdr_len) { /* res hdr exists */
+                    ic_str_format_cat(&enca, "Encapsulated: res-hdr=0");
+                    if (q->ctx.body_len) { /* body exists */
+                        ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                    } else { /*no body */
+                        ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                    }
+                } else { /* no res hdr */
+                    if (q->ctx.body_len) { /* body exists */
+                        ic_str_format_cat(&enca, ", res-body=0");
+                    } else { /*no body */
+                        ic_str_format_cat(&enca, ", null-body=0");
+                    }
                 }
-            } else { /* only body exists */
-                ic_str_format_cat(&enca, "Encapsulated: res-body=0");
             }
 
             if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",

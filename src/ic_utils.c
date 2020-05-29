@@ -114,3 +114,19 @@ void ic_str_free(ic_str_t *str)
     str->alloc_bytes = 0;
     str->len = 0;
 }
+
+size_t ic_count_digit(size_t n)
+{
+    size_t res = 0;
+
+    if (!n) {
+        return 1;
+    }
+
+    while (n) {
+        n /= 10;
+        res++;
+    }
+
+    return res;
+}

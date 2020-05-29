@@ -8,9 +8,10 @@
 #define IC_METHOD_REQMOD  "REQMOD"
 #define IC_METHOD_RESPMOD "RESPMOD"
 #define IC_METHOD_OPTIONS "OPTIONS"
-#define IC_RN_TWICE "\r\n\r\n"
-#define IC_CHUNK_IEOF "0\r\n\r\n"
-#define IC_PREVIEW_IEOF "0; ieof\r\n\r\n"
+#define IC_CRLF           "\r\n"
+#define IC_RN_TWICE       "\r\n\r\n"
+#define IC_CHUNK_IEOF     "0\r\n\r\n"
+#define IC_PREVIEW_IEOF   "0; ieof\r\n\r\n"
 #define IC_SRV_ALLOC_SIZE 2048
 
 #define IC_FREE(p) { free(p); p = NULL; }
