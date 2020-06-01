@@ -35,6 +35,30 @@ int ic_strtoui(const char *s, uint32_t *res, int base)
     return 0;
 }
 
+int ic_strtoul(const char *s, uint64_t *res, int base)
+{
+    uint64_t r;
+    char *endp;
+
+    if (!s || !res) {
+        return -IC_ERR_NULL_POINTER_INT;
+    }
+
+    r = strtoul(s, &endp, base);
+
+    if (r == ULLONG_MAX && errno == ERANGE) {
+        return -IC_ERR_INT_OVERFLOW;
+    }
+
+    if ((endp == s) || (*endp != '\0')) {
+        return -IC_ERR_BAD_INT;
+    }
+
+    *res = r;
+
+    return 0;
+}
+
 int ic_str_format_cat(ic_str_t *str, const char *fmt, ...)
 {
     int len = 0, rc = 0;
@@ -113,20 +137,4 @@ void ic_str_free(ic_str_t *str)
     str->data = NULL;
     str->alloc_bytes = 0;
     str->len = 0;
-}
-
-size_t ic_count_digit(size_t n)
-{
-    size_t res = 0;
-
-    if (!n) {
-        return 1;
-    }
-
-    while (n) {
-        n /= 10;
-        res++;
-    }
-
-    return res;
 }
