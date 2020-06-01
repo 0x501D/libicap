@@ -108,6 +108,8 @@ int main(int argc, char **argv)
         int hdr_len;
         size_t body_len;
 
+        ic_reuse_connection(&q);
+
         if (!service) {
             fprintf(stderr, "ICAP service is not set\n");
             goto out;

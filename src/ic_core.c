@@ -72,7 +72,6 @@ int ic_send_to_service(ic_query_int_t *q);
 int ic_read_from_service(ic_query_int_t *q);
 int ic_parse_response(ic_query_int_t *q, int method);
 ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q);
-void ic_query_clean(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -134,17 +133,25 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(q->data);
 }
 
-void ic_query_clean(ic_query_int_t *q)
+IC_EXPORT int ic_reuse_connection(ic_query_t *q)
 {
-    q->cl_data_len = 0;
-    q->cl_icap_hdr_len = 0;
-    q->srv_data_len = 0;
-    IC_FREE(q->service);
-    IC_FREE(q->uri);
-    IC_FREE(q->cl_icap_hdr);
-    IC_FREE(q->cl_data);
-    IC_FREE(q->srv_icap_hdr);
-    IC_FREE(q->srv_data);
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    icap->cl_data_len = 0;
+    icap->cl_icap_hdr_len = 0;
+    icap->srv_data_len = 0;
+    IC_FREE(icap->service);
+    IC_FREE(icap->uri);
+    IC_FREE(icap->cl_icap_hdr);
+    IC_FREE(icap->cl_data);
+    IC_FREE(icap->srv_icap_hdr);
+    IC_FREE(icap->srv_data);
+
+    return 0;
 }
 
 ic_query_int_t *ic_int_query(ic_query_t *q)
@@ -255,7 +262,6 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return -IC_ERR_QUERY_NULL;
     }
 
-    ic_query_clean(icap);
     icap->service = strdup(service);
     icap->method = IC_METHOD_ID_OPTS;
 
@@ -297,11 +303,8 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
         return -IC_ERR_QUERY_NULL;
     }
 
-    ic_query_clean(icap);
     if (icap->service) {
         IC_FREE(icap->service);
-        //XXX q->cl_icap_hdr_len = 0;
-        //...
     }
 
     icap->service = strdup(service);
