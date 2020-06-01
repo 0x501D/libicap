@@ -137,6 +137,7 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
 void ic_query_clean(ic_query_int_t *q)
 {
     q->cl_data_len = 0;
+    q->cl_icap_hdr_len = 0;
     q->srv_data_len = 0;
     IC_FREE(q->service);
     IC_FREE(q->uri);
@@ -297,6 +298,12 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
     }
 
     ic_query_clean(icap);
+    if (icap->service) {
+        IC_FREE(icap->service);
+        //XXX q->cl_icap_hdr_len = 0;
+        //...
+    }
+
     icap->service = strdup(service);
 
     if (!icap->service) {
@@ -317,6 +324,10 @@ IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
 
     if (!hdr) {
         return -IC_ERR_NULL_POINTER;
+    }
+
+    if (icap->ctx.req_hdr) {
+        IC_FREE(icap->ctx.req_hdr);
     }
 
     icap->ctx.req_hdr = malloc(len);
@@ -396,6 +407,10 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         return -IC_ERR_NULL_POINTER;
     }
 
+    if (icap->ctx.res_hdr) {
+        IC_FREE(icap->ctx.res_hdr);
+    }
+
     icap->ctx.res_hdr = malloc(len);
     if (!icap->ctx.res_hdr) {
         return -IC_ERR_ENOMEM;
@@ -443,12 +458,14 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
 
     icap->method = IC_METHOD_ID_RESP;
 
-    if ((err = ic_create_uri(icap)) != 0) {
-        return err;
-    }
+    if (!icap->cl_icap_hdr_len) {
+        if ((err = ic_create_uri(icap)) != 0) {
+            return err;
+        }
 
-    if ((err = ic_create_header(icap)) != 0) {
-        return err;
+        if ((err = ic_create_header(icap)) != 0) {
+            return err;
+        }
     }
 
     if (!icap->hdr_sent) {
@@ -681,41 +698,46 @@ int ic_create_header(ic_query_int_t *q)
     case IC_METHOD_ID_RESP:
         {
             ic_str_t enca;
+            int rc = 0;
 
             memset(&enca, 0, sizeof(enca));
 
             if (q->ctx.req_hdr_len) { /* req hdr exists */
-                ic_str_format_cat(&enca, "Encapsulated: req-hdr=0");
+                rc += ic_str_format_cat(&enca, "Encapsulated: req-hdr=0");
                 if (q->ctx.res_hdr_len) { /* res hdr exists */
-                    ic_str_format_cat(&enca, ", res-hdr=%zu", q->ctx.req_hdr_len);
+                    rc += ic_str_format_cat(&enca, ", res-hdr=%zu", q->ctx.req_hdr_len);
                     if (q->ctx.body_len) { /* body exists */
-                        ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                        rc += ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
                     } else { /*no body */
-                        ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                        rc += ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
                     }
                 } else { /* no res hdr */
                     if (q->ctx.body_len) { /* body exists */
-                        ic_str_format_cat(&enca, ", res-body=0");
+                        rc += ic_str_format_cat(&enca, ", res-body=0");
                     } else { /*no body */
-                        ic_str_format_cat(&enca, ", null-body=0");
+                        rc += ic_str_format_cat(&enca, ", null-body=0");
                     }
                 }
             } else { /* no req hrd */
                 if (q->ctx.res_hdr_len) { /* res hdr exists */
-                    ic_str_format_cat(&enca, "Encapsulated: res-hdr=0");
+                    rc += ic_str_format_cat(&enca, "Encapsulated: res-hdr=0");
                     if (q->ctx.body_len) { /* body exists */
-                        ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                        rc += ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
                     } else { /*no body */
-                        ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                        rc += ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
                     }
                 } else { /* no res hdr */
                     if (q->ctx.body_len) { /* body exists */
-                        ic_str_format_cat(&enca, ", res-body=0");
+                        rc += ic_str_format_cat(&enca, ", res-body=0");
                     } else { /*no body */
-                        ic_str_format_cat(&enca, ", null-body=0");
+                        rc += ic_str_format_cat(&enca, ", null-body=0");
                     }
                 }
             }
+
+            /*if (rc != 0) {
+                return -IC_ERR_ENOMEM;
+            }*/
 
             if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",
                         IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
