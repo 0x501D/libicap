@@ -132,6 +132,8 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->cl_data);
     free(icap->srv_icap_hdr);
     free(icap->srv_data);
+    free(icap->ctx.req_hdr);
+    free(icap->ctx.res_hdr);
     free(q->data);
 }
 
@@ -311,9 +313,7 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
         return -IC_ERR_QUERY_NULL;
     }
 
-    if (icap->service) {
-        IC_FREE(icap->service);
-    }
+    IC_FREE(icap->service);
 
     icap->service = strdup(service);
 
@@ -418,9 +418,7 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         return -IC_ERR_NULL_POINTER;
     }
 
-    if (icap->ctx.res_hdr) {
-        IC_FREE(icap->ctx.res_hdr);
-    }
+    IC_FREE(icap->ctx.res_hdr);
 
     icap->ctx.res_hdr = malloc(len);
     if (!icap->ctx.res_hdr) {
@@ -487,8 +485,6 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     icap->cl_data_len += icap->ctx.body_len;
 
     if (icap->ctx.type == IC_CTX_TYPE_CL) {
-        int rc;
-
         if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->ctx.content_len)) != 0) {
             return rc;
         }
@@ -501,6 +497,8 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
             icap->cl_data_len += 7;       /* \r\n0\r\n\r\n chunk end */
         }
     }
+
+    IC_FREE(icap->cl_data);
 
     if ((icap->cl_data = malloc(icap->cl_data_len)) == NULL) {
         return -IC_ERR_ENOMEM;
@@ -542,13 +540,10 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
     }
 
-    if ((rc = ic_poll_icap(icap)) != 0) {
-        return rc;
-    }
-
+    rc = ic_poll_icap(icap);
     ic_str_free(&hex);
 
-    return 0;
+    return rc;
 }
 
 static int ic_parse_response(ic_query_int_t *q, int method)

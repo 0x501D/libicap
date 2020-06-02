@@ -164,13 +164,16 @@ int main(int argc, char **argv)
             goto out;
         }
 
-        ic_send_respmod(&q);
-        /*const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
-        if ((err = ic_set_body(&q, body_2, 34)) == -1) {
-            printf("%s\n", ic_strerror(err));
-            goto out;
+        if (ic_send_respmod(&q) == 1) {
+            const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+
+            if ((err = ic_set_body(&q, body_2, 34)) == -1) {
+                printf("%s\n", ic_strerror(err));
+                goto out;
+            }
+
+            ic_send_respmod(&q);
         }
-        ic_send_respmod(&q);*/
 
         close(fd);
         fd = -1;
