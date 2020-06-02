@@ -71,7 +71,7 @@ static int ic_create_header(ic_query_int_t *q);
 static int ic_poll_icap(ic_query_int_t *q);
 static int ic_send_to_service(ic_query_int_t *q);
 static int ic_read_from_service(ic_query_int_t *q);
-static int ic_parse_response(ic_query_int_t *q, int method);
+static int ic_parse_response(ic_query_int_t *q);
 static ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
@@ -298,7 +298,7 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return rc;
     }
 
-    if ((rc = ic_parse_response(icap, IC_METHOD_ID_OPTS)) != 0) {
+    if ((rc = ic_parse_response(icap)) != 0) {
         return rc;
     }
 
@@ -546,7 +546,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     return rc;
 }
 
-static int ic_parse_response(ic_query_int_t *q, int method)
+static int ic_parse_response(ic_query_int_t *q)
 {
     size_t len = 0;
     int end_found = 0;
@@ -618,7 +618,7 @@ static int ic_parse_response(ic_query_int_t *q, int method)
         return -IC_ERR_BAD_HEADER;
     }
 
-    if (method == IC_METHOD_ID_OPTS && q->rc != IC_CODE_OK) {
+    if (q->method == IC_METHOD_ID_OPTS && q->rc != IC_CODE_OK) {
         switch (q->rc) {
         case IC_CODE_BAD_REQUEST:
             return -IC_ERR_BAD_REQUEST;
@@ -628,7 +628,7 @@ static int ic_parse_response(ic_query_int_t *q, int method)
     }
 
     /* Get ICAP options */
-    if (method == IC_METHOD_ID_OPTS) {
+    if (q->method == IC_METHOD_ID_OPTS) {
         /* RFC-3507: Field names are case-insensitive. */
         if ((str = strcasestr(q->srv_icap_hdr, "\nMethods: "))) {
             if (strstr(str, "RESPMOD")) {
