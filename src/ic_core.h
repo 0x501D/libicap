@@ -1,6 +1,7 @@
 #ifndef IC_CORE_H_
 #define IC_CORE_H_
 
+#define _GNU_SOURCE /* asprintf(3), memmem(3) */
 #define IC_EXPORT __attribute__((visibility ("default")))
 #define IC_ICAP_ID "ICAP/1.0"
 #define IC_CODE_OK          200

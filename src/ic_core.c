@@ -1,4 +1,5 @@
-#define _GNU_SOURCE /* asprintf(3), memmem(3) */
+#include "ic_core.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -15,7 +16,6 @@
 #include "../libicap.h"
 
 #include "ic_err.h"
-#include "ic_core.h"
 #include "ic_utils.h"
 
 typedef enum ic_method {

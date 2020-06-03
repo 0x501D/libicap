@@ -1,3 +1,5 @@
+#include "ic_core.h"
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -121,6 +123,49 @@ static int ic_str_append_mem(ic_str_t *str, const char *src, size_t len)
     memcpy(str->data + str->len, src, len);
     str->data[str->len + len] = '\0';
     str->len += len;
+
+    return 0;
+}
+
+int ic_extract_substr(ic_substr_t *s)
+{
+    char *res = NULL;
+    char *sub_begin, *p;
+    size_t res_buf_len, sub_offset, str_rest;
+    char *start = NULL, *end = NULL;
+
+    sub_begin = memmem(s->str, s->str_len, s->sub, s->sub_len);
+    if (!sub_begin) {
+        return 1;
+    }
+
+    sub_offset = (unsigned char *) sub_begin - (unsigned char *) s->str;
+    str_rest = s->str_len - sub_offset;
+    p = sub_begin;
+
+    for (size_t n = 0; n < str_rest; n++, p++) {
+        char ch = *p;
+
+        if (ch == s->begin) {
+            start = p + 1;
+        }
+
+        if (start && (ch == s->end)) {
+            end = p;
+            res_buf_len = end - start;
+
+            if ((res = calloc(1, res_buf_len + 1)) == NULL) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            memcpy(res, start, res_buf_len);
+            break;
+        }
+    }
+
+    if (res) {
+        s->result = res;
+    }
 
     return 0;
 }
