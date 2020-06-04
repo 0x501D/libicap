@@ -72,7 +72,7 @@ static int ic_poll_icap(ic_query_int_t *q);
 static int ic_send_to_service(ic_query_int_t *q);
 static int ic_read_from_service(ic_query_int_t *q);
 static int ic_parse_response(ic_query_int_t *q);
-static ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q);
+static int ic_get_resp_ctx_type(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -352,63 +352,51 @@ IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
     return 0;
 }
 
-static ic_ctx_type_t ic_get_resp_ctx_type(ic_query_int_t *q)
+static int ic_get_resp_ctx_type(ic_query_int_t *q)
 {
     const char *cl = "\nContent-Length: ";
     const char *te = "\nTransfer-Encoding: chunked";
-    void *clp = NULL;
+    int rc = 0;
 
-    clp = memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, cl, strlen(cl));
-    if (clp) {
-        /* Get Content-Length value */
-        int rc = 0;
-        char *p = (char *) clp;
-        size_t cl_buf_len = 0;
-        size_t cl_offset = (unsigned char *) clp - q->ctx.res_hdr;
-        size_t cl_rest = q->ctx.res_hdr_len - cl_offset;
-        char *cl_buf;
-        char *start = NULL, *end = NULL;
-
-        for (size_t n = 0; n < cl_rest; n++, p++) {
-            char ch = *p;
-
-            if (ch == 0x20) {
-                start = p + 1;
-            }
-
-            if (ch == 0xd) {
-                end = p;
-                cl_buf_len = end - start;
-
-                if ((cl_buf = calloc(1, cl_buf_len + 1)) == NULL) {
-                    return -IC_ERR_ENOMEM;
-                }
-
-                memcpy(cl_buf, start, cl_buf_len);
-                if ((rc = ic_strtoul(cl_buf, &q->ctx.content_len, 10)) != 0) {
-                    free(cl_buf);
-                    return rc;
-                }
-
-                free(cl_buf);
-                break;
-            }
-        }
-
-        return IC_CTX_TYPE_CL;
-    }
+    ic_substr_t sub = {
+        .str = q->ctx.res_hdr,
+        .sub = cl,
+        .str_len = q->ctx.res_hdr_len,
+        .sub_len = strlen(cl),
+        .begin = 0x20, /* space */
+        .end   = 0xd   /* \r    */
+    };
 
     if (memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, te, strlen(te))) {
-        return IC_CTX_TYPE_CHUNKED;
+        q->ctx.type = IC_CTX_TYPE_CHUNKED;
+        return 0;
     }
 
-    return IC_CTX_TYPE_CLOSE;
+    rc = ic_extract_substr(&sub);
+    if (rc == 0) {
+        if ((rc = ic_strtoul(sub.result, &q->ctx.content_len, 10)) != 0) {
+            free(sub.result);
+            return rc;
+        }
+
+        free(sub.result);
+        q->ctx.type = IC_CTX_TYPE_CL;
+
+        return 0;
+    } else if (rc < 0) {
+        return rc;
+    }
+
+    q->ctx.type = IC_CTX_TYPE_CLOSE;
+
+    return 0;
 }
 
 IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         size_t len, ic_ctx_type_t *type)
 {
     ic_query_int_t *icap = ic_int_query(q);
+    int rc;
 
     if (!icap) {
         return -IC_ERR_QUERY_NULL;
@@ -427,7 +415,12 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
 
     memcpy(icap->ctx.res_hdr, hdr, len);
     icap->ctx.res_hdr_len = len;
-    icap->ctx.type = *type = ic_get_resp_ctx_type(icap);
+
+    if ((rc = ic_get_resp_ctx_type(icap)) < 0) {
+        return rc;
+    }
+
+    *type = rc;
 
     return 0;
 }

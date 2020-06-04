@@ -129,6 +129,7 @@ static int ic_str_append_mem(ic_str_t *str, const char *src, size_t len)
 
 int ic_extract_substr(ic_substr_t *s)
 {
+    int rc = 1;
     char *res = NULL;
     char *sub_begin, *p;
     size_t res_buf_len, sub_offset, str_rest;
@@ -136,7 +137,7 @@ int ic_extract_substr(ic_substr_t *s)
 
     sub_begin = memmem(s->str, s->str_len, s->sub, s->sub_len);
     if (!sub_begin) {
-        return 1;
+        return rc;
     }
 
     sub_offset = (unsigned char *) sub_begin - (unsigned char *) s->str;
@@ -165,9 +166,10 @@ int ic_extract_substr(ic_substr_t *s)
 
     if (res) {
         s->result = res;
+        rc = 0;
     }
 
-    return 0;
+    return rc;
 }
 
 void ic_str_free(ic_str_t *str)

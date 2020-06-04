@@ -8,14 +8,17 @@ typedef struct ic_str {
 } ic_str_t;
 
 typedef struct ic_substr {
-    void *str;
-    void *sub;
+    const void *str;
+    const void *sub;
     char *result;
     size_t str_len;
     size_t sub_len;
     char begin;
     char end;
 } ic_substr_t;
+
+#define IC_INIT_STR (ic_str_t) { NULL, 0, 0 }
+#define IC_INIT_SUB (ic_substr_t) { NULL, NULL, NULL, 0, 0, 0, 0 }
 
 int ic_extract_substr(ic_substr_t *s);
 int ic_strtoui(const char *s, uint32_t *res, int base);
