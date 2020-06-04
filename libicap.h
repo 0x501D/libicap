@@ -37,7 +37,9 @@ void ic_disconnect(ic_query_t *q);
 void ic_query_deinit(ic_query_t *q);
 
 const char *ic_strerror(int err);
-const char *ic_get_icap_header(ic_query_t *q);
+const char *ic_get_icap_hdr(ic_query_t *q);
+const char *ic_get_req_hdr(ic_query_t *q);
+const char *ic_get_resp_hdr(ic_query_t *q);
 const char *ic_get_content(ic_query_t *q, size_t *len);
 
 #ifdef _cplusplus

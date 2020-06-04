@@ -31,36 +31,40 @@ typedef struct ic_opts {
     unsigned int m_req:1;
 } ic_opts_t;
 
-typedef struct ic_ctx {
+typedef struct ic_cl_ctx {
+    ic_opts_t opts;
     ic_ctx_type_t type;
     size_t req_hdr_len;
     size_t res_hdr_len;
     size_t body_len;
+    size_t payload_len;
     uint64_t body_sended;
     uint64_t content_len;
-    unsigned char *req_hdr;
-    unsigned char *res_hdr;
+    int icap_hdr_len;
+    unsigned char *req_hdr; /* REQMOD header */
+    unsigned char *res_hdr; /* RESPMOD header */
     const unsigned char *body;
-} ic_ctx_t;
+    char *icap_hdr;
+    char *payload;
+} ic_cl_ctx_t;
+
+typedef struct ic_srv_ctx {
+    ic_opts_t opts;
+    size_t payload_len;
+    uint32_t rc; /* ICAP return code */
+    char *icap_hdr;
+    char *payload;
+} ic_srv_ctx_t;
 
 typedef struct ic_query_int {
     int sd;
     ic_method_t method;
-    uint32_t rc;
     uint16_t port;
-    ic_opts_t opts_cl;
-    ic_opts_t opts_srv;
-    ic_ctx_t ctx;
-    size_t cl_data_len;
-    size_t srv_data_len;
-    int cl_icap_hdr_len;
-    char *srv;
+    ic_cl_ctx_t cl;   /* ICAP client context */
+    ic_srv_ctx_t srv; /* ICAP server context */
+    char *srv_addr;
     char *service;
     char *uri;
-    char *cl_icap_hdr;
-    char *cl_data;
-    char *srv_icap_hdr;
-    char *srv_data;
     unsigned int hdr_sent:1;
     unsigned int preview_mode:1;
 } ic_query_int_t;
@@ -127,13 +131,13 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
 
     free(icap->service);
     free(icap->uri);
-    free(icap->srv);
-    free(icap->cl_icap_hdr);
-    free(icap->cl_data);
-    free(icap->srv_icap_hdr);
-    free(icap->srv_data);
-    free(icap->ctx.req_hdr);
-    free(icap->ctx.res_hdr);
+    free(icap->srv_addr);
+    free(icap->cl.icap_hdr);
+    free(icap->cl.payload);
+    free(icap->srv.icap_hdr);
+    free(icap->srv.payload);
+    free(icap->cl.req_hdr);
+    free(icap->cl.res_hdr);
     free(q->data);
 }
 
@@ -145,17 +149,17 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q)
         return -IC_ERR_QUERY_NULL;
     }
 
-    icap->cl_data_len = 0;
-    icap->cl_icap_hdr_len = 0;
-    icap->srv_data_len = 0;
+    icap->cl.payload_len = 0;
+    icap->cl.icap_hdr_len = 0;
+    icap->srv.payload_len= 0;
     icap->hdr_sent = 0;
 
     IC_FREE(icap->service);
     IC_FREE(icap->uri);
-    IC_FREE(icap->cl_icap_hdr);
-    IC_FREE(icap->cl_data);
-    IC_FREE(icap->srv_icap_hdr);
-    IC_FREE(icap->srv_data);
+    IC_FREE(icap->cl.icap_hdr);
+    IC_FREE(icap->cl.payload);
+    IC_FREE(icap->srv.icap_hdr);
+    IC_FREE(icap->srv.payload);
 
     if (icap->sd == -1) {
         return -IC_ERR_CONN_CLOSED;
@@ -256,7 +260,7 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
 
     icap->sd = sd;
     icap->port = port;
-    if ((icap->srv = strdup(srv)) == NULL) {
+    if ((icap->srv_addr = strdup(srv)) == NULL) {
         return -IC_ERR_ENOMEM;
     }
 
@@ -287,12 +291,12 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
         return err;
     }
 
-    icap->cl_data = strdup(icap->cl_icap_hdr);
-    if (!icap->cl_data) {
+    icap->cl.payload = strdup(icap->cl.icap_hdr);
+    if (!icap->cl.payload) {
         return -IC_ERR_ENOMEM;
     }
 
-    icap->cl_data_len = icap->cl_icap_hdr_len;
+    icap->cl.payload_len = icap->cl.icap_hdr_len;
 
     if ((rc = ic_poll_icap(icap)) != 0) {
         return rc;
@@ -337,17 +341,15 @@ IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
         return -IC_ERR_NULL_POINTER;
     }
 
-    if (icap->ctx.req_hdr) {
-        IC_FREE(icap->ctx.req_hdr);
-    }
+    IC_FREE(icap->cl.req_hdr);
 
-    icap->ctx.req_hdr = malloc(len);
-    if (!icap->ctx.req_hdr) {
+    icap->cl.req_hdr = malloc(len);
+    if (!icap->cl.req_hdr) {
         return -IC_ERR_ENOMEM;
     }
 
-    memcpy(icap->ctx.req_hdr, hdr, len);
-    icap->ctx.req_hdr_len = len;
+    memcpy(icap->cl.req_hdr, hdr, len);
+    icap->cl.req_hdr_len = len;
 
     return 0;
 }
@@ -359,35 +361,35 @@ static int ic_get_resp_ctx_type(ic_query_int_t *q)
     int rc = 0;
 
     ic_substr_t sub = {
-        .str = q->ctx.res_hdr,
+        .str = q->cl.res_hdr,
         .sub = cl,
-        .str_len = q->ctx.res_hdr_len,
+        .str_len = q->cl.res_hdr_len,
         .sub_len = strlen(cl),
         .begin = 0x20, /* space */
         .end   = 0xd   /* \r    */
     };
 
-    if (memmem(q->ctx.res_hdr, q->ctx.res_hdr_len, te, strlen(te))) {
-        q->ctx.type = IC_CTX_TYPE_CHUNKED;
+    if (memmem(q->cl.res_hdr, q->cl.res_hdr_len, te, strlen(te))) {
+        q->cl.type = IC_CTX_TYPE_CHUNKED;
         return 0;
     }
 
     rc = ic_extract_substr(&sub);
     if (rc == 0) {
-        if ((rc = ic_strtoul(sub.result, &q->ctx.content_len, 10)) != 0) {
+        if ((rc = ic_strtoul(sub.result, &q->cl.content_len, 10)) != 0) {
             free(sub.result);
             return rc;
         }
 
         free(sub.result);
-        q->ctx.type = IC_CTX_TYPE_CL;
+        q->cl.type = IC_CTX_TYPE_CL;
 
         return 0;
     } else if (rc < 0) {
         return rc;
     }
 
-    q->ctx.type = IC_CTX_TYPE_CLOSE;
+    q->cl.type = IC_CTX_TYPE_CLOSE;
 
     return 0;
 }
@@ -406,15 +408,15 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         return -IC_ERR_NULL_POINTER;
     }
 
-    IC_FREE(icap->ctx.res_hdr);
+    IC_FREE(icap->cl.res_hdr);
 
-    icap->ctx.res_hdr = malloc(len);
-    if (!icap->ctx.res_hdr) {
+    icap->cl.res_hdr = malloc(len);
+    if (!icap->cl.res_hdr) {
         return -IC_ERR_ENOMEM;
     }
 
-    memcpy(icap->ctx.res_hdr, hdr, len);
-    icap->ctx.res_hdr_len = len;
+    memcpy(icap->cl.res_hdr, hdr, len);
+    icap->cl.res_hdr_len = len;
 
     if ((rc = ic_get_resp_ctx_type(icap)) < 0) {
         return rc;
@@ -439,9 +441,9 @@ IC_EXPORT int ic_set_body(ic_query_t *q, const unsigned char *body,
     }
 
     /* for memory saving just copy body pointer */
-    icap->ctx.body = body;
-    icap->ctx.body_len = len;
-    icap->cl_data_len = 0;
+    icap->cl.body = body;
+    icap->cl.body_len = len;
+    icap->cl.payload_len = 0;
 
     return 0;
 }
@@ -461,7 +463,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
 
     icap->method = IC_METHOD_ID_RESP;
 
-    if (!icap->cl_icap_hdr_len) {
+    if (!icap->cl.icap_hdr_len) {
         if ((err = ic_create_uri(icap)) != 0) {
             return err;
         }
@@ -472,68 +474,73 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     }
 
     if (!icap->hdr_sent) {
-        icap->cl_data_len = icap->cl_icap_hdr_len +
-            icap->ctx.req_hdr_len + icap->ctx.res_hdr_len;
+        icap->cl.payload_len = icap->cl.icap_hdr_len +
+            icap->cl.req_hdr_len + icap->cl.res_hdr_len;
     }
-    icap->cl_data_len += icap->ctx.body_len;
+    icap->cl.payload_len += icap->cl.body_len;
 
-    if (icap->ctx.type == IC_CTX_TYPE_CL) {
-        if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->ctx.content_len)) != 0) {
+    if (icap->cl.type == IC_CTX_TYPE_CL) {
+        if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.content_len)) != 0) {
             return rc;
         }
 
-        if (!icap->ctx.body_sended) {
-            icap->cl_data_len += hex.len; /* <HEX>\r\n  chunk start */
+        if (!icap->cl.body_sended) {
+            icap->cl.payload_len += hex.len; /* <HEX>\r\n  chunk start */
         }
 
-        if ((icap->ctx.body_sended + icap->ctx.body_len) == icap->ctx.content_len) {
-            icap->cl_data_len += 7;       /* \r\n0\r\n\r\n chunk end */
+        if ((icap->cl.body_sended + icap->cl.body_len) == icap->cl.content_len) {
+            icap->cl.payload_len += 7;       /* \r\n0\r\n\r\n chunk end */
         }
     }
 
-    IC_FREE(icap->cl_data);
+    IC_FREE(icap->cl.payload);
 
-    if ((icap->cl_data = malloc(icap->cl_data_len)) == NULL) {
+    if ((icap->cl.payload = malloc(icap->cl.payload_len)) == NULL) {
         return -IC_ERR_ENOMEM;
     }
 
-    p = icap->cl_data;
+    p = icap->cl.payload;
 
     if (!icap->hdr_sent) {
-        memcpy(p, icap->cl_icap_hdr, icap->cl_icap_hdr_len);
-        p += icap->cl_icap_hdr_len;
+        memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
+        p += icap->cl.icap_hdr_len;
     }
 
-    if (icap->ctx.type == IC_CTX_TYPE_CL) {
+    if (icap->cl.type == IC_CTX_TYPE_CL) {
         if (!icap->hdr_sent) {
-            if (icap->ctx.req_hdr_len) {
-                memcpy(p, icap->ctx.req_hdr, icap->ctx.req_hdr_len);
-                p += icap->ctx.req_hdr_len;
+            if (icap->cl.req_hdr_len) {
+                memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
+                p += icap->cl.req_hdr_len;
             }
 
-            if (icap->ctx.res_hdr_len) {
-                memcpy(p, icap->ctx.res_hdr, icap->ctx.res_hdr_len);
-                p += icap->ctx.res_hdr_len;
+            if (icap->cl.res_hdr_len) {
+                memcpy(p, icap->cl.res_hdr, icap->cl.res_hdr_len);
+                p += icap->cl.res_hdr_len;
             }
         }
 
-        if (icap->ctx.body_len) {
-            if (!icap->ctx.body_sended) {
+        if (icap->cl.body_len) {
+            if (!icap->cl.body_sended) {
                 memcpy(p, hex.data, hex.len);
                 p += hex.len;
             }
 
-            memcpy(p, icap->ctx.body, icap->ctx.body_len);
+            memcpy(p, icap->cl.body, icap->cl.body_len);
 
-            if ((icap->ctx.body_sended + icap->ctx.body_len) ==
-                    icap->ctx.content_len) {
-                p += icap->ctx.body_len;
+            if ((icap->cl.body_sended + icap->cl.body_len) ==
+                    icap->cl.content_len) {
+                p += icap->cl.body_len;
                 memcpy(p, IC_CRLF IC_CHUNK_IEOF, 7);
             }
         }
     }
 
-    rc = ic_poll_icap(icap);
+    if ((rc = ic_poll_icap(icap)) < 0) {
+        goto out;
+    }
+
+    rc = ic_parse_response(icap);
+out:
     ic_str_free(&hex);
 
     return rc;
@@ -543,16 +550,16 @@ static int ic_parse_response(ic_query_int_t *q)
 {
     size_t len = 0;
     int end_found = 0;
-    char *p = q->srv_data;
+    char *p = q->srv.payload;
     char *str;
     size_t id_len = sizeof(IC_ICAP_ID) - 1;
 
-    if ((q->srv_data_len < id_len) || memcmp(q->srv_data, IC_ICAP_ID, id_len) != 0) {
+    if ((q->srv.payload_len < id_len) || memcmp(q->srv.payload, IC_ICAP_ID, id_len) != 0) {
         return -IC_ERR_NON_ICAP;
     }
 
-    for (len = 0; len != q->srv_data_len; len++, p++) {
-        if ((len + 4 <= q->srv_data_len) && (memcmp(p, IC_RN_TWICE, 4) == 0)) {
+    for (len = 0; len != q->srv.payload_len; len++, p++) {
+        if ((len + 4 <= q->srv.payload_len) && (memcmp(p, IC_RN_TWICE, 4) == 0)) {
             end_found = 1;
             break;
         }
@@ -562,15 +569,16 @@ static int ic_parse_response(ic_query_int_t *q)
         return -IC_ERR_HEADER_END;
     }
 
-    q->srv_icap_hdr = calloc(1, len + 1);
-    if (!q->srv_icap_hdr) {
+    q->srv.icap_hdr = calloc(1, len + 1);
+    if (!q->srv.icap_hdr) {
         return -IC_ERR_ENOMEM;
     }
 
-    memcpy(q->srv_icap_hdr, q->srv_data, len);
+    /* XXX check for null-body */
+    memcpy(q->srv.icap_hdr, q->srv.payload, len);
 
     /* Get ICAP status code */
-    if ((str = strstr(q->srv_icap_hdr, IC_ICAP_ID)) != NULL) {
+    if ((str = strstr(q->srv.icap_hdr, IC_ICAP_ID)) != NULL) {
         char *start, *end;
         size_t space = 0;
 
@@ -598,7 +606,7 @@ static int ic_parse_response(ic_query_int_t *q)
 
             memcpy(status, start, slen);
 
-            if ((rc = ic_strtoui(status, &q->rc, 10)) != 0) {
+            if ((rc = ic_strtoui(status, &q->srv.rc, 10)) != 0) {
                 free(status);
                 return rc;
             }
@@ -611,8 +619,8 @@ static int ic_parse_response(ic_query_int_t *q)
         return -IC_ERR_BAD_HEADER;
     }
 
-    if (q->method == IC_METHOD_ID_OPTS && q->rc != IC_CODE_OK) {
-        switch (q->rc) {
+    if (q->method == IC_METHOD_ID_OPTS && q->srv.rc != IC_CODE_OK) {
+        switch (q->srv.rc) {
         case IC_CODE_BAD_REQUEST:
             return -IC_ERR_BAD_REQUEST;
         default:
@@ -623,24 +631,24 @@ static int ic_parse_response(ic_query_int_t *q)
     /* Get ICAP options */
     if (q->method == IC_METHOD_ID_OPTS) {
         /* RFC-3507: Field names are case-insensitive. */
-        if ((str = strcasestr(q->srv_icap_hdr, "\nMethods: "))) {
+        if ((str = strcasestr(q->srv.icap_hdr, "\nMethods: "))) {
             if (strstr(str, "RESPMOD")) {
-                q->opts_srv.m_resp = 1;
+                q->srv.opts.m_resp = 1;
             }
             if (strstr(str, "REQMOD")) {
-                q->opts_srv.m_req = 1;
+                q->srv.opts.m_req = 1;
             }
         } else {
             return -IC_ERR_METHODS_NOT_FOUND;
         }
 
-        if ((str = strcasestr(q->srv_icap_hdr, "\nAllow: "))) {
+        if ((str = strcasestr(q->srv.icap_hdr, "\nAllow: "))) {
             if (strstr(str, "204")) {
-                q->opts_srv.allow_204 = 1;
+                q->srv.opts.allow_204 = 1;
             }
         }
 
-        if ((str = strcasestr(q->srv_icap_hdr, "\nPreview: "))) {
+        if ((str = strcasestr(q->srv.icap_hdr, "\nPreview: "))) {
             int rc;
             size_t plen;
             char *start, *end, *preview;
@@ -663,7 +671,7 @@ static int ic_parse_response(ic_query_int_t *q)
 
             memcpy(preview, start, plen);
 
-            if ((rc = ic_strtoui(preview, &q->opts_srv.preview_len, 10)) != 0) {
+            if ((rc = ic_strtoui(preview, &q->srv.opts.preview_len, 10)) != 0) {
                 free(preview);
                 return rc;
             }
@@ -678,7 +686,7 @@ static int ic_parse_response(ic_query_int_t *q)
 static int ic_create_uri(ic_query_int_t *q)
 {
     if (asprintf(&q->uri, "icap://%s:%u/%s",
-                q->srv, q->port, q->service) == -1) {
+                q->srv_addr, q->port, q->service) == -1) {
         return -IC_ERR_ENOMEM;
     }
 
@@ -698,7 +706,7 @@ static int ic_create_header(ic_query_int_t *q)
     switch (q->method) {
 
     case IC_METHOD_ID_OPTS:
-        if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",
+        if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s",
                     IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
                     "Encapsulated: null-body=0", IC_RN_TWICE)) == -1) {
             return -IC_ERR_ENOMEM;
@@ -712,32 +720,32 @@ static int ic_create_header(ic_query_int_t *q)
 
             memset(&enca, 0, sizeof(enca));
 
-            if (q->ctx.req_hdr_len) { /* req hdr exists */
+            if (q->cl.req_hdr_len) { /* req hdr exists */
                 rc += ic_str_format_cat(&enca, "Encapsulated: req-hdr=0");
-                if (q->ctx.res_hdr_len) { /* res hdr exists */
-                    rc += ic_str_format_cat(&enca, ", res-hdr=%zu", q->ctx.req_hdr_len);
-                    if (q->ctx.body_len) { /* body exists */
-                        rc += ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                if (q->cl.res_hdr_len) { /* res hdr exists */
+                    rc += ic_str_format_cat(&enca, ", res-hdr=%zu", q->cl.req_hdr_len);
+                    if (q->cl.body_len) { /* body exists */
+                        rc += ic_str_format_cat(&enca, ", res-body=%zu", q->cl.res_hdr_len);
                     } else { /*no body */
-                        rc += ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                        rc += ic_str_format_cat(&enca, ", null-body=%zu", q->cl.res_hdr_len);
                     }
                 } else { /* no res hdr */
-                    if (q->ctx.body_len) { /* body exists */
+                    if (q->cl.body_len) { /* body exists */
                         rc += ic_str_format_cat(&enca, ", res-body=0");
                     } else { /*no body */
                         rc += ic_str_format_cat(&enca, ", null-body=0");
                     }
                 }
             } else { /* no req hrd */
-                if (q->ctx.res_hdr_len) { /* res hdr exists */
+                if (q->cl.res_hdr_len) { /* res hdr exists */
                     rc += ic_str_format_cat(&enca, "Encapsulated: res-hdr=0");
-                    if (q->ctx.body_len) { /* body exists */
-                        rc += ic_str_format_cat(&enca, ", res-body=%zu", q->ctx.res_hdr_len);
+                    if (q->cl.body_len) { /* body exists */
+                        rc += ic_str_format_cat(&enca, ", res-body=%zu", q->cl.res_hdr_len);
                     } else { /*no body */
-                        rc += ic_str_format_cat(&enca, ", null-body=%zu", q->ctx.res_hdr_len);
+                        rc += ic_str_format_cat(&enca, ", null-body=%zu", q->cl.res_hdr_len);
                     }
                 } else { /* no res hdr */
-                    if (q->ctx.body_len) { /* body exists */
+                    if (q->cl.body_len) { /* body exists */
                         rc += ic_str_format_cat(&enca, ", res-body=0");
                     } else { /*no body */
                         rc += ic_str_format_cat(&enca, ", null-body=0");
@@ -745,17 +753,17 @@ static int ic_create_header(ic_query_int_t *q)
                 }
             }
 
-            /*if (rc != 0) {
+            if (rc != 0) {
                 return -IC_ERR_ENOMEM;
-            }*/
+            }
 
-            if ((q->cl_icap_hdr_len = asprintf(&q->cl_icap_hdr, "%s %s %s\r\n%s%s",
+            if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s",
                         IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
                         enca.data, IC_RN_TWICE)) == -1) {
                 return -IC_ERR_ENOMEM;
             }
 
-            printf("'%s'\n", q->cl_icap_hdr);
+            //printf("'%s'\n", q->cl_icap_hdr);
 
             ic_str_free(&enca);
         }
@@ -827,7 +835,8 @@ static int ic_send_to_service(ic_query_int_t *q)
     size_t total_sended = 0;
 
     do {
-        sended = send(q->sd, q->cl_data + total_sended, q->cl_data_len - total_sended, 0);
+        sended = send(q->sd, q->cl.payload + total_sended,
+                q->cl.payload_len - total_sended, 0);
 
         if (sended < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             return -IC_ERR_SEND;
@@ -835,7 +844,7 @@ static int ic_send_to_service(ic_query_int_t *q)
         total_sended += sended;
     } while (sended > 0);
 
-    if (total_sended != q->cl_data_len) {
+    if (total_sended != q->cl.payload_len) {
         return -IC_ERR_SEND_PARTED;
     }
 
@@ -843,11 +852,11 @@ static int ic_send_to_service(ic_query_int_t *q)
         q->hdr_sent = 1;
     }
 
-    if (q->ctx.type == IC_CTX_TYPE_CL) {
-        q->ctx.body_sended += q->ctx.body_len;
+    if (q->cl.type == IC_CTX_TYPE_CL) {
+        q->cl.body_sended += q->cl.body_len;
 
         /* Do now wait for the ICAP server response if not all chunk data sended */
-        if (q->ctx.body_sended != q->ctx.content_len) {
+        if (q->cl.body_sended != q->cl.content_len) {
             return 1;
         }
     }
@@ -861,23 +870,23 @@ static int ic_read_from_service(ic_query_int_t *q)
     size_t total_read = 0;
     size_t n_alloc = IC_SRV_ALLOC_SIZE;
 
-    if ((q->srv_data = calloc(1, n_alloc)) == NULL) {
+    if ((q->srv.payload = calloc(1, n_alloc)) == NULL) {
         return -IC_ERR_ENOMEM;
     }
 
     do {
         if (total_read >= IC_SRV_ALLOC_SIZE) {
             n_alloc += IC_SRV_ALLOC_SIZE;
-            void *tmp = realloc(q->srv_data, n_alloc);
+            void *tmp = realloc(q->srv.payload, n_alloc);
             if (!tmp) {
-                free(q->srv_data);
+                free(q->srv.payload);
                 return -IC_ERR_ENOMEM;
             }
 
-            q->srv_data = tmp;
+            q->srv.payload = tmp;
         }
 
-        nread  = read(q->sd, q->srv_data, IC_SRV_ALLOC_SIZE);
+        nread  = read(q->sd, q->srv.payload, IC_SRV_ALLOC_SIZE);
 
         if (nread < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             return -IC_ERR_SEND;
@@ -887,7 +896,7 @@ static int ic_read_from_service(ic_query_int_t *q)
         total_read += nread;
     } while (nread > 0);
 
-    q->srv_data_len = total_read;
+    q->srv.payload_len= total_read;
 
     return 0;
 }
@@ -900,7 +909,7 @@ IC_EXPORT void ic_disconnect(ic_query_t *q)
     icap->sd = -1;
 }
 
-IC_EXPORT const char *ic_get_icap_header(ic_query_t *q)
+IC_EXPORT const char *ic_get_icap_hdr(ic_query_t *q)
 {
     ic_query_int_t *icap = ic_int_query(q);
 
@@ -908,7 +917,7 @@ IC_EXPORT const char *ic_get_icap_header(ic_query_t *q)
         return NULL;
     }
 
-    return icap->srv_icap_hdr;
+    return icap->srv.icap_hdr;
 }
 
 IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
@@ -919,7 +928,7 @@ IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
         return NULL;
     }
 
-    *len = icap->srv_data_len;
+    *len = icap->srv.payload_len;
 
-    return icap->srv_data;
+    return icap->srv.payload;
 }
