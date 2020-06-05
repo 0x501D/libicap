@@ -178,8 +178,7 @@ void ic_str_free(ic_str_t *str)
         return;
     }
 
-    if (str->data != NULL)
-        free(str->data);
+    free(str->data);
 
     str->data = NULL;
     str->alloc_bytes = 0;
