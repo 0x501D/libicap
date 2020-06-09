@@ -794,7 +794,7 @@ static int ic_poll_icap(ic_query_int_t *q)
     fd_set rset, wset;
     struct timeval tv;
 
-    tv.tv_sec = 1;
+    tv.tv_sec = 60;
     tv.tv_usec = 0;
 
     q->srv.n_alloc = IC_SRV_ALLOC_LEN;
@@ -824,13 +824,15 @@ static int ic_poll_icap(ic_query_int_t *q)
                 rc = ic_read_from_service(q);
 
                 switch (rc) {
-                case 0:
+                case 0: /* read done */
                     printf(">>> read done\n");
                     done = 1;
                     break;
-                case 1:
+                case 1: /* read more */
+                    printf(">>> read more\n");
                     break;
-                default:
+                default: /* read error */
+                    printf(">>> read error\n");
                     return rc;
                 }
             }
@@ -840,14 +842,16 @@ static int ic_poll_icap(ic_query_int_t *q)
                 rc = ic_send_to_service(q);
 
                 switch (rc) {
-                case 0:
+                case 0: /* write done */
                     printf(">>> write done\n");
                     send_done = 1;
                     break;
-                case 1:
+                case 1: /* do not need to read */
+                    printf(">>> do not need to read\n");
                     done = 1;
                     break;
-                case 2:
+                case 2: /* write more */
+                    printf(">>> write more\n");
                     break;
                 default:
                     return rc;
