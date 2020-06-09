@@ -55,6 +55,7 @@ typedef struct ic_srv_ctx {
     size_t res_hdr_len;
     size_t body_len;
     size_t payload_len;
+    size_t n_alloc;
     uint32_t rc;            /* ICAP return code */
     unsigned char *req_hdr; /* REQMOD header */
     unsigned char *res_hdr; /* RESPMOD header */
@@ -62,6 +63,7 @@ typedef struct ic_srv_ctx {
     char *icap_hdr;
     char *payload;
     unsigned int null_body:1;
+    unsigned int got_hdr:1;
 } ic_srv_ctx_t;
 
 typedef struct ic_query_int {
@@ -166,6 +168,8 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
         icap->cl.body_sended = 0;
         icap->cl.icap_hdr_len = 0;
         icap->hdr_sent = 0;
+        icap->srv.got_hdr = 0;
+        icap->srv.null_body = 0;
 
         IC_FREE(icap->service);
         IC_FREE(icap->uri);
@@ -314,10 +318,6 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
     icap->cl.payload_len = icap->cl.icap_hdr_len;
 
     if ((rc = ic_poll_icap(icap)) != 0) {
-        return rc;
-    }
-
-    if ((rc = ic_parse_response(icap)) != 0) {
         return rc;
     }
 
@@ -550,9 +550,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
     }
 
-    if ((rc = ic_poll_icap(icap)) == 0) {
-        rc = ic_parse_response(icap);
-    }
+    rc = ic_poll_icap(icap);
 
     ic_str_free(&hex);
     return rc;
@@ -586,7 +584,11 @@ static int ic_parse_response(ic_query_int_t *q)
         return -IC_ERR_ENOMEM;
     }
 
-    /* XXX check for null-body */
+    if (memmem(q->srv.payload, q->srv.payload_len,
+                IC_NULL_BODY, sizeof(IC_NULL_BODY) - 1)) {
+        q->srv.null_body = 1;
+    }
+
     memcpy(q->srv.icap_hdr, q->srv.payload, len);
 
     /* Get ICAP status code */
@@ -795,6 +797,11 @@ static int ic_poll_icap(ic_query_int_t *q)
     tv.tv_sec = 1;
     tv.tv_usec = 0;
 
+    q->srv.n_alloc = IC_SRV_ALLOC_LEN;
+    if ((q->srv.payload = calloc(1, q->srv.n_alloc)) == NULL) {
+        return -IC_ERR_ENOMEM;
+    }
+
     while (!done) {
         FD_ZERO(&rset);
         FD_ZERO(&wset);
@@ -813,19 +820,28 @@ static int ic_poll_icap(ic_query_int_t *q)
             return -IC_ERR_SRV_TIMEOUT;
         default:
             if (FD_ISSET(q->sd, &rset)) {
-                printf("read\n");
-                if ((rc = ic_read_from_service(q)) == 0) {
+                printf(">>> read\n");
+                rc = ic_read_from_service(q);
+
+                switch (rc) {
+                case 0:
+                    printf(">>> read done\n");
                     done = 1;
-                } else {
+                    break;
+                case 1:
+                    break;
+                default:
                     return rc;
                 }
             }
 
             if (FD_ISSET(q->sd, &wset)) {
+                printf(">>> write\n");
                 rc = ic_send_to_service(q);
 
                 switch (rc) {
                 case 0:
+                    printf(">>> write done\n");
                     send_done = 1;
                     break;
                 case 1:
@@ -887,17 +903,12 @@ static int ic_send_to_service(ic_query_int_t *q)
 static int ic_read_from_service(ic_query_int_t *q)
 {
     ssize_t nread;
-    size_t total_read = 0;
-    size_t n_alloc = IC_SRV_ALLOC_SIZE;
-
-    if ((q->srv.payload = calloc(1, n_alloc)) == NULL) {
-        return -IC_ERR_ENOMEM;
-    }
+    int rc = 1;
 
     do {
-        if (total_read >= IC_SRV_ALLOC_SIZE) {
-            n_alloc += IC_SRV_ALLOC_SIZE;
-            void *tmp = realloc(q->srv.payload, n_alloc);
+        if (q->srv.payload_len + IC_SRV_READ_LEN >= q->srv.n_alloc) {
+            q->srv.n_alloc *= 2;
+            void *tmp = realloc(q->srv.payload, q->srv.n_alloc);
             if (!tmp) {
                 free(q->srv.payload);
                 return -IC_ERR_ENOMEM;
@@ -906,20 +917,44 @@ static int ic_read_from_service(ic_query_int_t *q)
             q->srv.payload = tmp;
         }
 
-        nread  = read(q->sd, q->srv.payload, IC_SRV_ALLOC_SIZE);
+        nread = read(q->sd, q->srv.payload + q->srv.payload_len, IC_SRV_READ_LEN);
+        if (nread > 0) {
+            q->srv.payload_len += nread;
+        }
+        printf("read data %zd, total:%zd\n", nread, q->srv.payload_len);
 
         if (nread < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             return -IC_ERR_SEND;
         } else if (nread < 0) {
             break;
         }
-        total_read += nread;
     } while (nread > 0);
 
-    q->srv.payload_len = total_read;
-    printf("total_read:%zd\n", nread);
+    /* XXX what if we do not get ICAP header now, only part of it ? */
+    if (!q->srv.got_hdr) {
+        int n = 0;
+        if ((n = ic_parse_response(q)) != 0) {
+            return n;
+        }
+        printf("got ICAP header\n");
+        q->srv.got_hdr = 1;
+    }
 
-    return 0;
+    if (q->srv.null_body) {
+        printf("got NULL body\n");
+        rc = 0;
+    } else {
+        /* check for zero chunk */
+        if (q->srv.payload_len > 7) {
+            if (!memcmp(q->srv.payload + q->srv.payload_len - 7,
+                        IC_CRLF IC_CHUNK_IEOF , 7)) {
+                printf("zero chunk found\n");
+                rc = 0;
+            }
+        }
+    }
+
+    return rc;
 }
 
 IC_EXPORT void ic_disconnect(ic_query_t *q)
