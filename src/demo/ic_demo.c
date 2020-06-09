@@ -108,7 +108,7 @@ int main(int argc, char **argv)
         int hdr_len;
         size_t body_len;
 
-        ic_reuse_connection(&q);
+        ic_reuse_connection(&q, 0);
 
         if (!service) {
             fprintf(stderr, "ICAP service is not set\n");
@@ -167,6 +167,7 @@ int main(int argc, char **argv)
         if (ic_send_respmod(&q) == 1) {
 #if 0
             const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+            ic_reuse_connection(&q, 1);
 
             if ((err = ic_set_body(&q, body_2, 34)) == -1) {
                 printf("%s\n", ic_strerror(err));

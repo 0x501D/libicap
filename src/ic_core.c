@@ -40,6 +40,7 @@ typedef struct ic_cl_ctx {
     size_t payload_len;
     uint64_t body_sended;
     uint64_t content_len;
+    uint64_t total_sended;
     int icap_hdr_len;
     unsigned char *req_hdr; /* REQMOD header */
     unsigned char *res_hdr; /* RESPMOD header */
@@ -50,10 +51,17 @@ typedef struct ic_cl_ctx {
 
 typedef struct ic_srv_ctx {
     ic_opts_t opts;
+    size_t req_hdr_len;
+    size_t res_hdr_len;
+    size_t body_len;
     size_t payload_len;
-    uint32_t rc; /* ICAP return code */
+    uint32_t rc;            /* ICAP return code */
+    unsigned char *req_hdr; /* REQMOD header */
+    unsigned char *res_hdr; /* RESPMOD header */
+    const unsigned char *body;
     char *icap_hdr;
     char *payload;
+    unsigned int null_body:1;
 } ic_srv_ctx_t;
 
 typedef struct ic_query_int {
@@ -141,7 +149,7 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(q->data);
 }
 
-IC_EXPORT int ic_reuse_connection(ic_query_t *q)
+IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
 {
     ic_query_int_t *icap = ic_int_query(q);
 
@@ -150,13 +158,20 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q)
     }
 
     icap->cl.payload_len = 0;
-    icap->cl.icap_hdr_len = 0;
+    icap->cl.total_sended = 0;
     icap->srv.payload_len= 0;
-    icap->hdr_sent = 0;
 
-    IC_FREE(icap->service);
-    IC_FREE(icap->uri);
-    IC_FREE(icap->cl.icap_hdr);
+    if (!proceed) {
+        icap->cl.type = 0;
+        icap->cl.body_sended = 0;
+        icap->cl.icap_hdr_len = 0;
+        icap->hdr_sent = 0;
+
+        IC_FREE(icap->service);
+        IC_FREE(icap->uri);
+        IC_FREE(icap->cl.icap_hdr);
+    }
+
     IC_FREE(icap->cl.payload);
     IC_FREE(icap->srv.icap_hdr);
     IC_FREE(icap->srv.payload);
@@ -535,14 +550,11 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
     }
 
-    if ((rc = ic_poll_icap(icap)) < 0) {
-        goto out;
+    if ((rc = ic_poll_icap(icap)) == 0) {
+        rc = ic_parse_response(icap);
     }
 
-    rc = ic_parse_response(icap);
-out:
     ic_str_free(&hex);
-
     return rc;
 }
 
@@ -708,7 +720,7 @@ static int ic_create_header(ic_query_int_t *q)
     case IC_METHOD_ID_OPTS:
         if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s",
                     IC_METHOD_OPTIONS, q->uri, IC_ICAP_ID,
-                    "Encapsulated: null-body=0", IC_RN_TWICE)) == -1) {
+                    IC_NULL_BODY, IC_RN_TWICE)) == -1) {
             return -IC_ERR_ENOMEM;
         }
         break;
@@ -763,8 +775,6 @@ static int ic_create_header(ic_query_int_t *q)
                 return -IC_ERR_ENOMEM;
             }
 
-            //printf("'%s'\n", q->cl_icap_hdr);
-
             ic_str_free(&enca);
         }
         break;
@@ -803,6 +813,7 @@ static int ic_poll_icap(ic_query_int_t *q)
             return -IC_ERR_SRV_TIMEOUT;
         default:
             if (FD_ISSET(q->sd, &rset)) {
+                printf("read\n");
                 if ((rc = ic_read_from_service(q)) == 0) {
                     done = 1;
                 } else {
@@ -812,12 +823,15 @@ static int ic_poll_icap(ic_query_int_t *q)
 
             if (FD_ISSET(q->sd, &wset)) {
                 rc = ic_send_to_service(q);
+
                 switch (rc) {
                 case 0:
                     send_done = 1;
                     break;
                 case 1:
                     done = 1;
+                    break;
+                case 2:
                     break;
                 default:
                     return rc;
@@ -832,33 +846,39 @@ static int ic_poll_icap(ic_query_int_t *q)
 static int ic_send_to_service(ic_query_int_t *q)
 {
     ssize_t sended = 0;
-    size_t total_sended = 0;
 
     do {
-        sended = send(q->sd, q->cl.payload + total_sended,
-                q->cl.payload_len - total_sended, 0);
+        sended = send(q->sd, q->cl.payload + q->cl.total_sended,
+                q->cl.payload_len - q->cl.total_sended, 0);
+
+        if (sended > 0) {
+            q->cl.total_sended += sended;
+        }
 
         if (sended < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             return -IC_ERR_SEND;
         }
-        total_sended += sended;
     } while (sended > 0);
-
-    if (total_sended != q->cl.payload_len) {
-        return -IC_ERR_SEND_PARTED;
-    }
 
     if (!q->hdr_sent) {
         q->hdr_sent = 1;
     }
 
+    /* All payload was sended but not all content available now */
     if (q->cl.type == IC_CTX_TYPE_CL) {
-        q->cl.body_sended += q->cl.body_len;
+        if (q->cl.total_sended == q->cl.payload_len) {
+            q->cl.body_sended += q->cl.body_len;
 
-        /* Do now wait for the ICAP server response if not all chunk data sended */
-        if (q->cl.body_sended != q->cl.content_len) {
-            return 1;
+            /* Do now wait for the ICAP server response if not all chunk data sended */
+            if (q->cl.body_sended != q->cl.content_len) {
+                return 1;
+            }
         }
+    }
+
+    /* Not all payload was sended, wait for select(2) writefds available */
+    if (q->cl.total_sended != q->cl.payload_len) {
+        return 2;
     }
 
     return 0;
@@ -896,7 +916,8 @@ static int ic_read_from_service(ic_query_int_t *q)
         total_read += nread;
     } while (nread > 0);
 
-    q->srv.payload_len= total_read;
+    q->srv.payload_len = total_read;
+    printf("total_read:%zd\n", nread);
 
     return 0;
 }

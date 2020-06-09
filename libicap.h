@@ -12,9 +12,9 @@ typedef struct ic_query {
 } ic_query_t;
 
 typedef enum ic_ctx_type {
-    IC_CTX_TYPE_CLOSE,   /* objects arriving using a TCP close              */
-    IC_CTX_TYPE_CHUNKED, /* objects arriving using chunked encoding         */
-    IC_CTX_TYPE_CL,      /* objects arriving using "Content-Length" headers */
+    IC_CTX_TYPE_CLOSE = 1, /* objects arriving using a TCP close              */
+    IC_CTX_TYPE_CHUNKED,   /* objects arriving using chunked encoding         */
+    IC_CTX_TYPE_CL,        /* objects arriving using "Content-Length" headers */
 } ic_ctx_type_t;
 
 int ic_query_init(ic_query_t *q);
@@ -32,7 +32,7 @@ int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr, size_t len, ic_ctx_t
 /* body will not be copyed, do not free it before using ic_send_(resp|req)mod() */
 int ic_set_body(ic_query_t *q, const unsigned char *body, size_t len);
 
-int ic_reuse_connection(ic_query_t *q);
+int ic_reuse_connection(ic_query_t *q, int proceed);
 void ic_disconnect(ic_query_t *q);
 void ic_query_deinit(ic_query_t *q);
 
