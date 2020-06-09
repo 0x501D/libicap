@@ -142,17 +142,20 @@ int main(int argc, char **argv)
             fprintf(stderr, "Cannot read '%s': %s\n", path, strerror(errno));
             goto out;
         }
-
+#if 0
         if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
                         "Content-Length: %zu\r\n\r\n", body_len)) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
-        /*if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
+#endif
+#if 1
+        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
                         "Content-Length: 68\r\n\r\n")) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
-        }*/
+        }
+#endif
 
         if ((err = ic_set_res_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
             printf("%s\n", ic_strerror(err));
@@ -165,7 +168,7 @@ int main(int argc, char **argv)
         }
 
         if (ic_send_respmod(&q) == 1) {
-#if 0
+#if 1
             const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
             ic_reuse_connection(&q, 1);
 
