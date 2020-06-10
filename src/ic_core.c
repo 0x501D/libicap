@@ -56,6 +56,7 @@ typedef struct ic_srv_ctx {
     size_t body_len;
     size_t payload_len;
     size_t n_alloc;
+    size_t icap_hdr_len;
     uint32_t rc;            /* ICAP return code */
     unsigned char *req_hdr; /* REQMOD header */
     unsigned char *res_hdr; /* RESPMOD header */
@@ -75,7 +76,7 @@ typedef struct ic_query_int {
     char *srv_addr;
     char *service;
     char *uri;
-    unsigned int hdr_sent:1;
+    unsigned int hdr_prepared:1; /* All headers prepared */
     unsigned int preview_mode:1;
 } ic_query_int_t;
 
@@ -167,7 +168,7 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
         icap->cl.type = 0;
         icap->cl.body_sended = 0;
         icap->cl.icap_hdr_len = 0;
-        icap->hdr_sent = 0;
+        icap->hdr_prepared = 0;
         icap->srv.got_hdr = 0;
         icap->srv.null_body = 0;
 
@@ -488,7 +489,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
     }
 
-    if (!icap->hdr_sent) {
+    if (!icap->hdr_prepared) {
         icap->cl.payload_len = icap->cl.icap_hdr_len +
             icap->cl.req_hdr_len + icap->cl.res_hdr_len;
     }
@@ -516,13 +517,13 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
 
     p = icap->cl.payload;
 
-    if (!icap->hdr_sent) {
+    if (!icap->hdr_prepared) {
         memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
         p += icap->cl.icap_hdr_len;
     }
 
     if (icap->cl.type == IC_CTX_TYPE_CL) {
-        if (!icap->hdr_sent) {
+        if (!icap->hdr_prepared) {
             if (icap->cl.req_hdr_len) {
                 memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
                 p += icap->cl.req_hdr_len;
@@ -548,6 +549,10 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
                 memcpy(p, IC_CRLF IC_CHUNK_IEOF, 7);
             }
         }
+    }
+
+    if (!icap->hdr_prepared) {
+        icap->hdr_prepared = 1;
     }
 
     rc = ic_poll_icap(icap);
@@ -579,7 +584,7 @@ static int ic_parse_response(ic_query_int_t *q)
         return -IC_ERR_HEADER_END;
     }
 
-    q->srv.icap_hdr = calloc(1, len + 1);
+    q->srv.icap_hdr = calloc(1, len + 1); /* add \0 */
     if (!q->srv.icap_hdr) {
         return -IC_ERR_ENOMEM;
     }
@@ -590,6 +595,7 @@ static int ic_parse_response(ic_query_int_t *q)
     }
 
     memcpy(q->srv.icap_hdr, q->srv.payload, len);
+    q->srv.icap_hdr_len = len + 4; /* + \r\n\r\n */
 
     /* Get ICAP status code */
     if ((str = strstr(q->srv.icap_hdr, IC_ICAP_ID)) != NULL) {
@@ -879,10 +885,6 @@ static int ic_send_to_service(ic_query_int_t *q)
             return -IC_ERR_SEND;
         }
     } while (sended > 0);
-
-    if (!q->hdr_sent) {
-        q->hdr_sent = 1;
-    }
 
     /* All payload was sended but not all content available now */
     if (q->cl.type == IC_CTX_TYPE_CL) {
