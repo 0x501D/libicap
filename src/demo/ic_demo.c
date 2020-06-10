@@ -167,7 +167,8 @@ int main(int argc, char **argv)
             goto out;
         }
 
-        if (ic_send_respmod(&q) == 1) {
+        rc = ic_send_respmod(&q);
+        if (rc == 1) {
 #if 0
             const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
             ic_reuse_connection(&q, 1);
@@ -179,6 +180,17 @@ int main(int argc, char **argv)
 
             ic_send_respmod(&q);
 #endif
+        } else if (rc == 0) {
+            size_t ctx_len;
+            const char *ctx = ic_get_content(&q, &ctx_len);
+
+            if (ctx) {
+                unlink("/tmp/content");
+                int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
+                write(fd, ctx, ctx_len);
+                close(fd);
+            }
+
         }
 
         icap_hdr = ic_get_icap_hdr(&q);

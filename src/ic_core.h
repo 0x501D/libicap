@@ -14,6 +14,8 @@
 #define IC_CHUNK_IEOF     "0\r\n\r\n"
 #define IC_PREVIEW_IEOF   "0; ieof\r\n\r\n"
 #define IC_NULL_BODY      "Encapsulated: null-body=0"
+#define IC_RES_BODY_SUB   ", res-body="
+#define IC_RES_BODY_ONLY  "Encapsulated: res-body=0"
 #define IC_SRV_READ_LEN   8192
 #define IC_SRV_ALLOC_LEN  IC_SRV_READ_LEN * 5
 

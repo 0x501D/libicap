@@ -51,9 +51,6 @@ typedef struct ic_cl_ctx {
 
 typedef struct ic_srv_ctx {
     ic_opts_t opts;
-    size_t req_hdr_len;
-    size_t res_hdr_len;
-    size_t body_len;
     size_t payload_len;
     size_t n_alloc;
     size_t icap_hdr_len;
@@ -65,6 +62,7 @@ typedef struct ic_srv_ctx {
     char *payload;
     unsigned int null_body:1;
     unsigned int got_hdr:1;
+    unsigned int decoded:1;
 } ic_srv_ctx_t;
 
 typedef struct ic_query_int {
@@ -88,6 +86,8 @@ static int ic_send_to_service(ic_query_int_t *q);
 static int ic_read_from_service(ic_query_int_t *q);
 static int ic_parse_response(ic_query_int_t *q);
 static int ic_get_resp_ctx_type(ic_query_int_t *q);
+static int ic_decode_chunked(ic_query_int_t *q);
+static uint64_t ic_get_body_offset(ic_query_int_t *q);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -171,6 +171,7 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
         icap->hdr_prepared = 0;
         icap->srv.got_hdr = 0;
         icap->srv.null_body = 0;
+        icap->srv.decoded = 0;
 
         IC_FREE(icap->service);
         IC_FREE(icap->uri);
@@ -985,12 +986,143 @@ IC_EXPORT const char *ic_get_icap_hdr(ic_query_t *q)
 IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
 {
     ic_query_int_t *icap = ic_int_query(q);
+    size_t content_len = 0;
+    const char *content;
 
     if (!icap || !len) {
         return NULL;
     }
 
-    *len = icap->srv.payload_len;
+    /* decode chunked transfer encoding */
+    if (icap->cl.type == IC_CTX_TYPE_CL) {
+        ic_decode_chunked(icap);
+    }
 
-    return icap->srv.payload;
+    content_len = icap->srv.payload_len - icap->srv.icap_hdr_len;
+
+    /* content initially was chunked encoded
+     * or no body exists */
+    if (icap->srv.decoded || icap->srv.null_body ||
+            icap->cl.type == IC_CTX_TYPE_CHUNKED) {
+        content = icap->srv.payload + icap->srv.icap_hdr_len;
+        *len = content_len;
+
+        return content;
+    }
+
+    return content;
+}
+
+static uint64_t ic_get_body_offset(ic_query_int_t *q)
+{
+    uint64_t offset = 0;
+
+    if (q->method == IC_METHOD_ID_RESP) { /* only resbody in RESPMOD response */
+        int rc;
+
+        /* response contains only body */
+        if (strstr(q->srv.icap_hdr, IC_RES_BODY_ONLY)) {
+            return 0;
+        }
+
+        ic_substr_t sub = {
+            .str = q->srv.payload,
+            .sub = IC_RES_BODY_SUB,
+            .str_len = q->srv.icap_hdr_len,
+            .sub_len = sizeof(IC_RES_BODY_SUB) - 1,
+            .begin = '=',
+            .end = '\r'
+        };
+
+        rc = ic_extract_substr(&sub);
+        if (rc == 0) {
+            if ((rc = ic_strtoul(sub.result, &offset, 10)) != 0) {
+                free(sub.result);
+                return rc;
+            }
+
+            free(sub.result);
+        } else if (rc < 0) {
+            return rc;
+        }
+    }
+    return offset;
+}
+
+static int ic_decode_chunked(ic_query_int_t *q)
+{
+    int rc = 0;
+    size_t body_len;
+    char *p = q->srv.payload;
+    char *begin, *end;
+
+    /* find body offset */
+    uint64_t offset = ic_get_body_offset(q);
+
+    /* find encoded body len */
+    body_len = q->srv.payload_len - q->srv.icap_hdr_len - offset;
+
+    /* skip ICAP header and HTTP headers if exists */
+    p += (q->srv.icap_hdr_len + offset);
+    char *pp = p;
+
+    begin = p;
+    for (size_t n = 0; n < body_len;) {
+        printf("***\n");
+        /* get chunk len and shift data */
+        if (!memcmp(p, IC_CRLF, sizeof(IC_CRLF) - 1)) {
+            size_t trim_len, chunk_len;
+            char *chunk_len_buf;
+
+            end = p;
+            trim_len = end - begin;
+            if ((chunk_len_buf = calloc(1, trim_len + 1)) == NULL) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            memcpy(chunk_len_buf, begin, trim_len);
+            if ((rc = ic_strtoul(chunk_len_buf, &chunk_len, 16)) != 0) {
+                free(chunk_len_buf);
+                printf("%zu  ololo:'%s'\n", trim_len, chunk_len_buf);
+                return rc;
+            }
+
+            if (chunk_len == 0) {
+                /* zero chunk indicates eof */
+                printf("eof\n");
+                q->srv.payload_len -= 7; /* \r\n0\r\n\r\n */
+                break;
+            }
+
+            trim_len += 2; /* add CRLF */
+            /* correct payload len */
+            q->srv.payload_len -= trim_len;
+
+            /* shift payload */
+
+            /* move to next chunk */
+            p += (chunk_len + 2);
+            begin = p;
+
+            /* calc buffer overflow protect */
+            n += (chunk_len + 2);
+            printf("npr:%zu, blen:%zu\n", n, body_len);
+
+            printf("trlen: %s\n", chunk_len_buf);
+            free(chunk_len_buf);
+        } else {
+            p++; n++;
+        }
+    }
+
+
+    /* XXX tmp debug */
+    unlink("/tmp/encoded");
+    int fd = open("/tmp/encoded", O_CREAT | O_WRONLY, 0660);
+    write(fd, pp, body_len);
+    close(fd);
+
+    q->srv.decoded = 1;
+
+    return rc;
 }

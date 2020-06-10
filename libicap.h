@@ -40,6 +40,7 @@ const char *ic_strerror(int err);
 const char *ic_get_icap_hdr(ic_query_t *q);
 const char *ic_get_req_hdr(ic_query_t *q);
 const char *ic_get_resp_hdr(ic_query_t *q);
+/** @return 0 if ENOMEM */
 const char *ic_get_content(ic_query_t *q, size_t *len);
 
 #ifdef _cplusplus
