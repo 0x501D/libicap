@@ -54,12 +54,14 @@ typedef struct ic_srv_ctx {
     size_t payload_len;
     size_t n_alloc;
     size_t icap_hdr_len;
+    size_t decoded_payload_len;
     uint32_t rc;            /* ICAP return code */
     unsigned char *req_hdr; /* REQMOD header */
     unsigned char *res_hdr; /* RESPMOD header */
     const unsigned char *body;
     char *icap_hdr;
     char *payload;
+    char *decoded_payload;
     unsigned int null_body:1;
     unsigned int got_hdr:1;
     unsigned int decoded:1;
@@ -181,6 +183,7 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
     IC_FREE(icap->cl.payload);
     IC_FREE(icap->srv.icap_hdr);
     IC_FREE(icap->srv.payload);
+    IC_FREE(icap->srv.decoded_payload);
 
     if (icap->sd == -1) {
         return -IC_ERR_CONN_CLOSED;
@@ -998,17 +1001,15 @@ IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
         ic_decode_chunked(icap);
     }
 
-    content_len = icap->srv.payload_len - icap->srv.icap_hdr_len;
+    if (icap->srv.decoded) {
+        *len = icap->srv.decoded_payload_len;
 
-    /* content initially was chunked encoded
-     * or no body exists */
-    if (icap->srv.decoded || icap->srv.null_body ||
-            icap->cl.type == IC_CTX_TYPE_CHUNKED) {
-        content = icap->srv.payload + icap->srv.icap_hdr_len;
-        *len = content_len;
-
-        return content;
+        return icap->srv.decoded_payload;
     }
+
+    content_len = icap->srv.payload_len - icap->srv.icap_hdr_len;
+    content = icap->srv.payload + icap->srv.icap_hdr_len;
+    *len = content_len;
 
     return content;
 }
@@ -1051,33 +1052,44 @@ static uint64_t ic_get_body_offset(ic_query_int_t *q)
 
 static int ic_decode_chunked(ic_query_int_t *q)
 {
-    int rc = 0, first_chunk = 1;
-    size_t body_len;
+    int rc = 0;
+    size_t body_len, content_len;
     char *p = q->srv.payload;
-    char *begin, *end;
+    char *begin, *dec;
 
     /* find body offset */
-    uint64_t offset = ic_get_body_offset(q);
+    uint64_t http_hdr_len = ic_get_body_offset(q);
 
     /* find encoded body len */
-    body_len = q->srv.payload_len - q->srv.icap_hdr_len - offset;
+    content_len = q->srv.payload_len - q->srv.icap_hdr_len;
+    body_len = content_len - http_hdr_len;
 
-    char *ppp = p;
-    /* skip ICAP header and HTTP headers if exists */
-    p += (q->srv.icap_hdr_len + offset);
+    q->srv.decoded_payload = malloc(content_len);
+    if (!q->srv.decoded_payload) {
+        return -IC_ERR_ENOMEM;
+    }
+    dec = q->srv.decoded_payload;
 
+    /* skip ICAP header and copy HTTP headers if exists */
+    p += q->srv.icap_hdr_len;
+    memcpy(dec, p, http_hdr_len);
+    q->srv.decoded_payload_len = http_hdr_len;
+    dec += http_hdr_len;
+
+    /* go to body */
+    p += http_hdr_len;
     begin = p;
-    for (size_t processed = 0; processed <= body_len;) {
-        printf("***\n");
-        /* get chunk len and shift data */
+
+    for (size_t n = 0; n < body_len; n++) {
         if (!memcmp(p, IC_CRLF, sizeof(IC_CRLF) - 1)) {
             size_t hex_len, chunk_len;
             char *chunk_len_buf;
-            printf("p: %#p %#p\n", p, begin);
 
-            /* begin <HEX> p <CRLF><chunk>*/
-            end = p;
-            hex_len = end - begin;
+            /* calculate hex len         *
+             * <CRLF><HEX><CRLF><CHUNK>  *
+             *        ^    ^             *
+             *        b    p             */
+            hex_len = p - begin;
 
             if ((chunk_len_buf = calloc(1, hex_len + 1)) == NULL) {
                 return -IC_ERR_ENOMEM;
@@ -1085,8 +1097,6 @@ static int ic_decode_chunked(ic_query_int_t *q)
 
             memcpy(chunk_len_buf, begin, hex_len);
             if ((rc = ic_strtoul(chunk_len_buf, &chunk_len, 16)) != 0) {
-                printf("begin: %#x\n", *(begin));
-                printf("%zu  bad len:'%s'\n", hex_len, chunk_len_buf);
                 free(chunk_len_buf);
                 return rc;
             }
@@ -1094,51 +1104,30 @@ static int ic_decode_chunked(ic_query_int_t *q)
             if (chunk_len == 0) {
                 /* zero chunk indicates eof */
                 printf("eof\n");
-                q->srv.payload_len -= 7; /* \r\n0\r\n\r\n */
                 break;
             }
 
-            hex_len += (first_chunk) ? 2 : 4; /* skip CRLF  */
-            /* correct payload len */
-            q->srv.payload_len -= hex_len;
-            processed += hex_len;
+            memcpy(dec, p + 2, chunk_len); /* skip <CRLF> */
+            q->srv.decoded_payload_len += chunk_len;
 
-            /* shift payload
-             * begin<HEX>end<CLRF><chunk> -> begin<chunk> */
-            printf("left: %zu\n", body_len - processed);
-            if (first_chunk) {
-                memmove(begin, end + 2, body_len - processed);
-            } else {
-                memmove(begin - 2, end + 2, body_len - processed);
-            }
-
-            /* move to next chunk --->
-             * <chunk><CRLF> p <HEX><CRLF> */
-            p = (first_chunk) ? begin : begin - 2;
-            p += (chunk_len + 2);
+            /* move to next chunk                                                *
+             * chunk current position              | new position:               *
+             * <CHUNKn><CRLF><HEX><CRLF><CHUNKn+1> | <CHUNKn+1><CRLF><HEX><CRLF> *
+             *                ^    ^               |                  ^          *
+             *                b    p               |                p && b       */
+            dec += chunk_len;
+            p += (chunk_len + 4);
             begin = p;
-
-            /* calc buffer overflow protect */
-            processed += (chunk_len + 2);
-            //printf("processed:%zu, blen:%zu\n", processed, body_len);
-
-            printf("hex_len: %s\n", chunk_len_buf);
-            free(chunk_len_buf);
-
-            if (first_chunk) {
-                first_chunk = 0;
-            }
         } else {
-            p++; processed++;
+            p++;
         }
-            printf("processed:%zu, blen:%zu\n", processed, body_len);
     }
 
-
     /* XXX tmp debug */
+    printf("dec len:%zu\n", q->srv.decoded_payload_len);
     unlink("/tmp/encoded");
     int fd = open("/tmp/encoded", O_CREAT | O_WRONLY, 0660);
-    write(fd, ppp, q->srv.payload_len);
+    write(fd, q->srv.decoded_payload, q->srv.decoded_payload_len);
     close(fd);
 
     q->srv.decoded = 1;
