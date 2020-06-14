@@ -182,13 +182,15 @@ int main(int argc, char **argv)
 #endif
         } else if (rc == 0) {
             size_t ctx_len;
-            const char *ctx = ic_get_content(&q, &ctx_len);
+            const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
             if (ctx) {
                 unlink("/tmp/content");
                 int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
                 write(fd, ctx, ctx_len);
                 close(fd);
+            } else {
+                printf("%s\n", ic_strerror(err));
             }
 
         }
@@ -197,6 +199,8 @@ int main(int argc, char **argv)
         if (icap_hdr) {
             printf("ICAP response:\n\n%s\n\n", icap_hdr);
         }
+
+        printf("ICAP status code:%d\n", ic_get_status_code(&q));
 
         close(fd);
         fd = -1;

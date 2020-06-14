@@ -4,8 +4,6 @@
 #define _GNU_SOURCE /* asprintf(3), memmem(3) */
 #define IC_EXPORT __attribute__((visibility ("default")))
 #define IC_ICAP_ID          "ICAP/1.0"
-#define IC_CODE_OK          200
-#define IC_CODE_BAD_REQUEST 400
 #define IC_METHOD_REQMOD    "REQMOD"
 #define IC_METHOD_RESPMOD   "RESPMOD"
 #define IC_METHOD_OPTIONS   "OPTIONS"

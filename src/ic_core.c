@@ -292,6 +292,17 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
     return 0;
 }
 
+IC_EXPORT int ic_get_status_code(ic_query_t *q)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    return icap->srv.rc;
+}
+
 IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
 {
     int err, rc;
@@ -987,19 +998,23 @@ IC_EXPORT const char *ic_get_icap_hdr(ic_query_t *q)
     return icap->srv.icap_hdr;
 }
 
-IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len)
+IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len, int *err)
 {
     ic_query_int_t *icap = ic_int_query(q);
     size_t content_len = 0;
     const char *content;
 
-    if (!icap || !len) {
+    if (!icap || !len || !err) {
         return NULL;
     }
 
     /* decode chunked transfer encoding */
     if (icap->cl.type == IC_CTX_TYPE_CL) {
-        ic_decode_chunked(icap);
+        int rc = ic_decode_chunked(icap);
+        if (rc != 0) {
+            *err = rc;
+            return NULL;
+        }
     }
 
     if (icap->srv.decoded) {

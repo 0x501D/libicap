@@ -7,6 +7,9 @@
 extern "C" {
 #endif
 
+#define IC_CODE_OK          200
+#define IC_CODE_BAD_REQUEST 400
+
 typedef struct ic_query {
     void *data;
 } ic_query_t;
@@ -37,11 +40,13 @@ void ic_disconnect(ic_query_t *q);
 void ic_query_deinit(ic_query_t *q);
 
 const char *ic_strerror(int err);
+
+int ic_get_status_code(ic_query_t *q);
 const char *ic_get_icap_hdr(ic_query_t *q);
 const char *ic_get_req_hdr(ic_query_t *q);
 const char *ic_get_resp_hdr(ic_query_t *q);
-/** @return 0 if ENOMEM */
-const char *ic_get_content(ic_query_t *q, size_t *len);
+/** @return NULL if ERROR */
+const char *ic_get_content(ic_query_t *q, size_t *len, int *err);
 
 #ifdef _cplusplus
 }
