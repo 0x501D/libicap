@@ -149,6 +149,7 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
     free(icap->cl.payload);
     free(icap->srv.icap_hdr);
     free(icap->srv.payload);
+    free(icap->srv.decoded_payload);
     free(icap->cl.req_hdr);
     free(icap->cl.res_hdr);
     free(q->data);
@@ -1101,6 +1102,8 @@ static int ic_decode_chunked(ic_query_int_t *q)
                 return rc;
             }
 
+            free(chunk_len_buf);
+
             if (chunk_len == 0) {
                 /* zero chunk indicates eof */
                 printf("eof\n");
@@ -1122,13 +1125,6 @@ static int ic_decode_chunked(ic_query_int_t *q)
             p++;
         }
     }
-
-    /* XXX tmp debug */
-    printf("dec len:%zu\n", q->srv.decoded_payload_len);
-    unlink("/tmp/encoded");
-    int fd = open("/tmp/encoded", O_CREAT | O_WRONLY, 0660);
-    write(fd, q->srv.decoded_payload, q->srv.decoded_payload_len);
-    close(fd);
 
     q->srv.decoded = 1;
 
