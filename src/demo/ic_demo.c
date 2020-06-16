@@ -15,9 +15,9 @@ void usage();
 int main(int argc, char **argv)
 {
     int err, rc = 0, fd = -1;
-    int opt;
+    int opt, allow_204 = 0;
     uint16_t port = 0;
-    const char *optstr = "s:p:n:f:h";
+    const char *optstr = "as:p:n:f:h";
     const char *icap_hdr;
     unsigned char *body = NULL;
     unsigned char *resp_hdr = NULL;
@@ -30,12 +30,13 @@ int main(int argc, char **argv)
     memset(&q, 0x0, sizeof(q));
 
     static const struct option longopts[] = {
-        { "server", required_argument, NULL, 's' },
-        { "port",   required_argument, NULL, 'p' },
-        { "name",   required_argument, NULL, 'n' },
-        { "file",   required_argument, NULL, 'f' },
-        { "help",   no_argument,       NULL, 'h' },
-        { NULL,     0,                 NULL,  0  }
+        { "server",    required_argument, NULL, 's' },
+        { "port",      required_argument, NULL, 'p' },
+        { "name",      required_argument, NULL, 'n' },
+        { "file",      required_argument, NULL, 'f' },
+        { "allow-204", no_argument,       NULL, 'a' },
+        { "help",      no_argument,       NULL, 'h' },
+        { NULL,        0,                 NULL,  0  }
     };
 
     while ((opt = getopt_long(argc, argv, optstr, longopts, NULL)) != -1) {
@@ -64,6 +65,9 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
             break;
+        case 'a':
+            allow_204 = 1;
+            break;
         case 'h':
             usage();
             exit(EXIT_SUCCESS);
@@ -82,6 +86,10 @@ int main(int argc, char **argv)
     if ((err = ic_query_init(&q)) < 0) {
         printf("%s\n", ic_strerror(err));
         exit(1);
+    }
+
+    if (allow_204) {
+        ic_allow_204(&q);
     }
 
     if (!port) {
@@ -227,5 +235,6 @@ void usage()
     printf("-p, --port   <number>      ICAP service port (default:1344)\n");
     printf("-n, --name   <name>        ICAP service name\n");
     printf("-f, --file   <path>        send file to ICAP service\n");
+    printf("-a, --allow-204            include Allow: 204\n");
     printf("-h, --help                 print this help\n");
 }

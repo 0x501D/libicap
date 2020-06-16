@@ -459,6 +459,19 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
     return 0;
 }
 
+IC_EXPORT int ic_allow_204(ic_query_t *q)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    icap->cl.opts.allow_204 = 1;
+
+    return 0;
+}
+
 IC_EXPORT int ic_set_body(ic_query_t *q, const unsigned char *body,
         size_t len)
 {
