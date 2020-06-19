@@ -131,6 +131,9 @@ IC_EXPORT int ic_query_init(ic_query_t *q)
         return -IC_ERR_ENOMEM;
     }
 
+    /* set default preview len */
+    ((ic_query_int_t *) q->data)->cl.opts.preview_len = IC_PREVIEW_LEN;
+
     return 0;
 }
 
@@ -337,6 +340,19 @@ IC_EXPORT int ic_get_options(ic_query_t *q, const char *service)
     if ((rc = ic_poll_icap(icap)) != 0) {
         return rc;
     }
+
+    return 0;
+}
+
+IC_EXPORT int ic_set_preview_len(ic_query_t *q, size_t len)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    icap->cl.opts.preview_len = len;
 
     return 0;
 }

@@ -32,6 +32,7 @@ int ic_set_service(ic_query_t *q, const char *service);
 int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr, size_t len);
 int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr, size_t len, ic_ctx_type_t *type);
 int ic_allow_204(ic_query_t *q);
+int ic_set_preview_len(ic_query_t *q, size_t len); /* defaults: 4096 */
 
 /* body will not be copyed, do not free it before using ic_send_(resp|req)mod() */
 int ic_set_body(ic_query_t *q, const unsigned char *body, size_t len);
