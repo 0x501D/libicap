@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define IC_CODE_OK          200
+#define IC_CODE_NO_CONTENT  204
 #define IC_CODE_BAD_REQUEST 400
 
 typedef struct ic_query {

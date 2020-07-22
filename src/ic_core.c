@@ -39,9 +39,11 @@ typedef struct ic_cl_ctx {
     size_t body_len;
     size_t payload_len;
     uint64_t body_sended;
+    uint64_t preview_sended_len;
     uint64_t content_len;
     uint64_t total_sended;
-    int icap_hdr_len;
+    uint64_t preview_msg_len;
+    int64_t icap_hdr_len;
     unsigned char *req_hdr; /* REQMOD header */
     unsigned char *res_hdr; /* RESPMOD header */
     const unsigned char *body;
@@ -76,8 +78,13 @@ typedef struct ic_query_int {
     char *srv_addr;
     char *service;
     char *uri;
-    unsigned int hdr_prepared:1; /* All headers prepared */
     unsigned int preview_mode:1;
+    unsigned int preview_sended:1;
+    unsigned int icap_hdr_sended:1;
+    unsigned int http_hdr_sended:1;
+    unsigned int origin_fit_preview:1;
+    unsigned int preview_non_complete:1;
+    unsigned int after_prew_hex_done:1; /* After preview mode, chunk data was added */
 } ic_query_int_t;
 
 static ic_query_int_t *ic_int_query(ic_query_t *q);
@@ -168,16 +175,22 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
 
     icap->cl.payload_len = 0;
     icap->cl.total_sended = 0;
-    icap->srv.payload_len= 0;
+    icap->srv.payload_len = 0;
 
     if (!proceed) {
         icap->cl.type = 0;
         icap->cl.body_sended = 0;
+        icap->cl.preview_sended_len = 0;
         icap->cl.icap_hdr_len = 0;
-        icap->hdr_prepared = 0;
         icap->srv.got_hdr = 0;
         icap->srv.null_body = 0;
         icap->srv.decoded = 0;
+        icap->preview_mode = 0;
+        icap->preview_sended = 0;
+        icap->icap_hdr_sended = 0;
+        icap->http_hdr_sended = 0;
+        icap->preview_non_complete = 0;
+        icap->origin_fit_preview = 0;
 
         IC_FREE(icap->service);
         IC_FREE(icap->uri);
@@ -249,6 +262,12 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
     if (fcntl(sd, F_SETFL, flags | O_NONBLOCK) == -1) {
         return -IC_ERR_SRV_NONBLOCK;
     }
+
+#if 1 // debug only!
+#include <netinet/tcp.h>
+    int flag = 1;
+    setsockopt(sd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int));
+#endif
 
     if ((connect(sd, (struct sockaddr *) &dst, sizeof(dst)) != 0)
             && (errno != EINPROGRESS)) {
@@ -514,9 +533,16 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
     char *p = NULL;
-    ic_str_t hex;
+    ic_str_t hex, rest_hex;
+    int add_preview_ieof = 0;
+    int add_rest_hex = 0;
+    int add_zero_chunk = 0;
+    int add_crlf = 1;
+    size_t http_hdr_len = (icap->http_hdr_sended) ? 0 :
+        (icap->cl.req_hdr_len + icap->cl.res_hdr_len);
 
     memset(&hex, 0, sizeof(hex));
+    memset(&rest_hex, 0, sizeof(rest_hex));
 
     if (!icap) {
         return -IC_ERR_QUERY_NULL;
@@ -534,41 +560,78 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
     }
 
-    if (!icap->hdr_prepared) {
-        icap->cl.payload_len = icap->cl.icap_hdr_len +
-            icap->cl.req_hdr_len + icap->cl.res_hdr_len;
+    if (icap->preview_mode) {
+        if (icap->cl.req_hdr_len + icap->cl.res_hdr_len + icap->cl.content_len <=
+                icap->cl.opts.preview_len) {
+            icap->origin_fit_preview = 1;
+        }
+    }
+
+    if (!icap->icap_hdr_sended) {
+        icap->cl.payload_len += icap->cl.icap_hdr_len;
+    }
+
+    if (!icap->http_hdr_sended) {
+        icap->cl.payload_len += icap->cl.req_hdr_len + icap->cl.res_hdr_len;
     }
     icap->cl.payload_len += icap->cl.body_len;
 
     if (icap->cl.type == IC_CTX_TYPE_CL) {
-        if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.content_len)) != 0) {
-            return rc;
+        if (!icap->preview_mode) {
+            if (!icap->cl.body_sended) {
+                /* No preview mode just calc hex for all body */
+                if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.content_len)) != 0) {
+                    return rc;
+                }
+                icap->cl.payload_len += hex.len; /* <HEX>\r\n  chunk start */
+            }
+            if ((icap->cl.body_sended + icap->cl.body_len) == icap->cl.content_len) {
+                icap->cl.payload_len += 7;       /* \r\n0\r\n\r\n chunk end */
+                add_zero_chunk = 1;
+            }
         }
 
-        if (!icap->cl.body_sended) {
-            icap->cl.payload_len += hex.len; /* <HEX>\r\n  chunk start */
+        if (icap->preview_mode && !icap->preview_sended) {
+            if (icap->origin_fit_preview) {
+                icap->cl.preview_msg_len = http_hdr_len + icap->cl.body_len;
+                if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.body_len)) != 0) {
+                    return rc;
+                }
+                icap->cl.payload_len += hex.len; /* <HEX>\r\n  chunk start */
+                icap->cl.preview_msg_len += hex.len;
+                if ((icap->cl.body_sended + icap->cl.body_len) == icap->cl.content_len) {
+                    icap->cl.payload_len += 13; /*\r\n0; ieof\r\n\r\n*/
+                    icap->cl.preview_msg_len += 13;
+                    add_preview_ieof = 1;
+                } else { /* just add CRLF */
+                    icap->cl.payload_len += 2;
+                    icap->cl.preview_msg_len += 2;
+                    add_crlf = 1;
+                }
+            } else {
+                if (icap->cl.preview_sended_len + http_hdr_len + icap->cl.body_len >
+                        icap->cl.opts.preview_len) {
+                    icap->cl.payload_len = icap->cl.opts.preview_len;
+                }
+            }
         }
 
-        if ((icap->cl.body_sended + icap->cl.body_len) == icap->cl.content_len) {
-            icap->cl.payload_len += 7;       /* \r\n0\r\n\r\n chunk end */
+        IC_FREE(icap->cl.payload);
+
+        if ((icap->cl.payload = malloc(icap->cl.payload_len)) == NULL) {
+            return -IC_ERR_ENOMEM;
         }
-    }
 
-    IC_FREE(icap->cl.payload);
+        printf("*** start making payload ***\n");
+        p = icap->cl.payload;
+        if (!icap->icap_hdr_sended) {
+            printf("add icap header\n");
+            memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
+            p += icap->cl.icap_hdr_len;
+        }
 
-    if ((icap->cl.payload = malloc(icap->cl.payload_len)) == NULL) {
-        return -IC_ERR_ENOMEM;
-    }
-
-    p = icap->cl.payload;
-
-    if (!icap->hdr_prepared) {
-        memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
-        p += icap->cl.icap_hdr_len;
-    }
-
-    if (icap->cl.type == IC_CTX_TYPE_CL) {
-        if (!icap->hdr_prepared) {
+        if (!icap->http_hdr_sended) {
+            printf("add http headers\n");
             if (icap->cl.req_hdr_len) {
                 memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
                 p += icap->cl.req_hdr_len;
@@ -580,24 +643,46 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
             }
         }
 
-        if (icap->cl.body_len) {
-            if (!icap->cl.body_sended) {
-                memcpy(p, hex.data, hex.len);
-                p += hex.len;
-            }
+        if (!icap->preview_mode && !icap->cl.body_sended) {
+            printf("no preview mode: add hex\n");
+            memcpy(p, hex.data, hex.len);
+            p += hex.len;
+        }
 
+        if (!icap->preview_mode) {
+            printf("no preview mode: add body\n");
             memcpy(p, icap->cl.body, icap->cl.body_len);
 
-            if ((icap->cl.body_sended + icap->cl.body_len) ==
-                    icap->cl.content_len) {
+            if (add_zero_chunk) {
+                printf("no preview mode: add zero chunk\n");
                 p += icap->cl.body_len;
                 memcpy(p, IC_CRLF IC_CHUNK_IEOF, 7);
             }
-        }
-    }
+        } else if (icap->preview_mode && !icap->preview_sended) {
+            printf("preview mode: add hex\n");
+            memcpy(p, hex.data, hex.len);
+            p += hex.len;
+            if (icap->origin_fit_preview) {
+                printf("preview mode: add body\n");
+                memcpy(p, icap->cl.body, icap->cl.body_len);
+                p += icap->cl.body_len;
+                if (add_preview_ieof) {
+                    printf("preview mode: add preview ieof\n");
+                    memcpy(p, IC_PREVIEW_IEOF, sizeof(IC_PREVIEW_IEOF) - 1);
+                } else if (add_crlf) {
+                    printf("preview mode: add crlf\n");
+                    memcpy(p, IC_CRLF, sizeof(IC_CRLF) - 1);
+                }
+            } else {
+                //... do some stuff
+            }
 
-    if (!icap->hdr_prepared) {
-        icap->hdr_prepared = 1;
+            int fd = open("/tmp/preview_mode", O_CREAT | O_WRONLY, 0666);
+            write(fd, icap->cl.payload, icap->cl.payload_len);
+            close(fd);
+        }
+
+        printf("*** end making payload ***\n");
     }
 
     rc = ic_poll_icap(icap);
@@ -629,6 +714,7 @@ static int ic_parse_response(ic_query_int_t *q)
         return -IC_ERR_HEADER_END;
     }
 
+    free(q->srv.icap_hdr);
     q->srv.icap_hdr = calloc(1, len + 1); /* add \0 */
     if (!q->srv.icap_hdr) {
         return -IC_ERR_ENOMEM;
@@ -822,13 +908,30 @@ static int ic_create_header(ic_query_int_t *q)
                 return -IC_ERR_ENOMEM;
             }
 
-            if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s",
+            /* Generate ICAP Preview params */
+            ic_str_t preview;
+            memset(&preview, 0, sizeof(preview));
+
+            if (q->cl.opts.allow_204 && q->srv.opts.allow_204) {
+                rc += ic_str_format_cat(&preview, "Allow: 204\r\n");
+                if (q->cl.body_len) {
+                    if (q->cl.opts.preview_len > q->srv.opts.preview_len) {
+                        q->cl.opts.preview_len = q->srv.opts.preview_len;
+                    }
+                }
+                rc += ic_str_format_cat(&preview, "Preview: %u\r\n", q->cl.opts.preview_len);
+                q->preview_mode = 1;
+            }
+
+            if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s%s",
                         IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
+                        preview.len ? preview.data : "",
                         enca.data, IC_RN_TWICE)) == -1) {
                 return -IC_ERR_ENOMEM;
             }
 
             ic_str_free(&enca);
+            ic_str_free(&preview);
         }
         break;
 
@@ -919,25 +1022,83 @@ static int ic_send_to_service(ic_query_int_t *q)
     ssize_t sended = 0;
 
     do {
-        sended = send(q->sd, q->cl.payload + q->cl.total_sended,
-                q->cl.payload_len - q->cl.total_sended, 0);
+        size_t send_len = 0;
+        if (!q->icap_hdr_sended) {
+            /* Send only ICAP header */
+            send_len = q->cl.icap_hdr_len;
+            printf("Send ICAP hdr: %zu\n", send_len);
+        } else if (q->preview_mode && !q->preview_sended) {
+            /* Send only preview data */
+            send_len = q->cl.preview_msg_len;
+            printf("Send preview data: %zu\n", send_len);
+        } else {
+            /* Send all payload */
+            send_len = q->cl.payload_len - q->cl.total_sended;
+            printf("Send payload data: %zu\n", send_len);
+        }
 
+        sended = send(q->sd, q->cl.payload + q->cl.total_sended,
+                send_len, 0);
         if (sended > 0) {
             q->cl.total_sended += sended;
+            if (q->preview_mode && !q->preview_sended) {
+                q->cl.preview_sended_len += q->cl.preview_msg_len;
+            }
+        }
+
+        if (!q->icap_hdr_sended) {
+            if (q->cl.total_sended == (uint64_t) q->cl.icap_hdr_len) { /* cannot be negative */
+                printf("ICAP hdr sended\n");
+                q->icap_hdr_sended = 1;
+            }
+        }
+
+        if (!q->http_hdr_sended && sended) {
+            if (q->cl.total_sended - q->cl.icap_hdr_len >=
+                    (q->cl.req_hdr_len + q->cl.res_hdr_len)) {
+                q->http_hdr_sended = 1;
+                printf("HTTP hdr sended\n");
+            }
+        }
+
+        if (q->icap_hdr_sended && q->preview_mode && !q->preview_sended) {
+            if (!q->preview_non_complete) {
+                if (q->cl.total_sended - q->cl.icap_hdr_len == q->cl.preview_msg_len) {
+                    printf("Catch first!\n");
+                    break;
+                }
+            } else {
+                if (q->cl.total_sended == q->cl.preview_msg_len) {
+                    printf("Catch other!\n");
+                    break;
+                }
+            }
         }
 
         if (sended < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             return -IC_ERR_SEND;
         }
     } while (sended > 0);
+    printf("total sended: %lu\n", q->cl.total_sended);
 
     /* All payload was sended but not all content available now */
     if (q->cl.type == IC_CTX_TYPE_CL) {
-        if (q->cl.total_sended == q->cl.payload_len) {
-            q->cl.body_sended += q->cl.body_len;
+        q->cl.body_sended += q->cl.body_len;
+        if (!q->preview_mode && q->cl.total_sended == q->cl.payload_len) {
 
             /* Do now wait for the ICAP server response if not all chunk data sended */
+            printf("Do now wait for the ICAP server response if not all chunk data sended\n");
             if (q->cl.body_sended != q->cl.content_len) {
+                return 1;
+            }
+        }
+        if (q->preview_mode && !q->preview_sended) {
+            printf("q->cl.body_sended: %zu, cl: %zu\n", q->cl.body_sended, q->cl.content_len);
+            if (q->origin_fit_preview && q->cl.body_sended != q->cl.content_len) {
+                printf("Not all preview data was sended\n");
+                if (!q->preview_non_complete) {
+                    q->preview_non_complete = 1;
+                }
                 return 1;
             }
         }
@@ -982,14 +1143,17 @@ static int ic_read_from_service(ic_query_int_t *q)
     } while (nread > 0);
 
     /* XXX what if we do not get ICAP header now, only part of it ? */
-    if (!q->srv.got_hdr) {
+    //if (!q->srv.got_hdr) {
         int n = 0;
         if ((n = ic_parse_response(q)) != 0) {
             return n;
         }
-        printf("got ICAP header\n");
+        printf("got ICAP header, rc = %d\n", q->srv.rc);
         q->srv.got_hdr = 1;
-    }
+        if (q->srv.rc == IC_CODE_NO_CONTENT) {
+            rc = 0;
+        }
+    //}
 
     if (q->srv.null_body) {
         printf("got NULL body\n");

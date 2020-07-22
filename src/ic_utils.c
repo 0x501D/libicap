@@ -11,6 +11,7 @@
 #include "ic_err.h"
 #include "ic_utils.h"
 
+static int ic_str_alloc_mem(ic_str_t *str, const char *src, size_t len);
 static int ic_str_append_mem(ic_str_t *str, const char *src, size_t len);
 
 int ic_strtoui(const char *s, uint32_t *res, int base)
@@ -61,6 +62,41 @@ int ic_strtoul(const char *s, uint64_t *res, int base)
     return 0;
 }
 
+int ic_str_format(ic_str_t *str, const char *fmt, ...)
+{
+    int rc;
+    int len = 0;
+    char *buf = NULL;
+    va_list args;
+
+    /* get required length */
+    va_start(args, fmt);
+    len = vsnprintf(buf, 0, fmt, args);
+    va_end(args);
+
+    if (len < 0) {
+        return -IC_ERR_INVAL_LEN_INT;
+    }
+
+    len++; /* for \0 */
+
+    if ((buf = calloc(1, len)) == NULL) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    va_start(args, fmt);
+    len = vsnprintf(buf, len, fmt, args);
+    if (len < 0) {
+        return -IC_ERR_INVAL_LEN_INT;
+    }
+    va_end(args);
+
+    rc = ic_str_alloc_mem(str, buf, len);
+    free(buf);
+
+    return rc;
+}
+
 int ic_str_format_cat(ic_str_t *str, const char *fmt, ...)
 {
     int len = 0, rc = 0;
@@ -93,6 +129,37 @@ int ic_str_format_cat(ic_str_t *str, const char *fmt, ...)
     free(buf);
 
     return rc;
+}
+
+static int ic_str_alloc_mem(ic_str_t *str, const char *src, size_t len)
+{
+    if (!str)
+        return -IC_ERR_NULL_POINTER_INT;
+
+    size_t len_needed;
+
+    if (len + 1 < len) {
+        return -IC_ERR_INT_OVERFLOW_INT;
+    }
+
+    len_needed = len + 1;
+
+    if (len_needed > str->alloc_bytes) {
+        free(str->data);
+        str->data = malloc(len_needed);
+        if (!str->data) {
+            return -IC_ERR_ENOMEM;
+        }
+        str->alloc_bytes = len_needed;
+    }
+
+    if (src) {
+        memcpy(str->data, src, len);
+        str->data[len] = '\0';
+    }
+
+    str->len = len;
+    return 0;
 }
 
 static int ic_str_append_mem(ic_str_t *str, const char *src, size_t len)

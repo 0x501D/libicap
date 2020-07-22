@@ -16,8 +16,9 @@ int main(int argc, char **argv)
 {
     int err, rc = 0, fd = -1;
     int opt, allow_204 = 0;
+    uint32_t preview_len;
     uint16_t port = 0;
-    const char *optstr = "as:p:n:f:h";
+    const char *optstr = "as:p:n:f:l:h";
     const char *icap_hdr;
     unsigned char *body = NULL;
     unsigned char *resp_hdr = NULL;
@@ -30,13 +31,14 @@ int main(int argc, char **argv)
     memset(&q, 0x0, sizeof(q));
 
     static const struct option longopts[] = {
-        { "server",    required_argument, NULL, 's' },
-        { "port",      required_argument, NULL, 'p' },
-        { "name",      required_argument, NULL, 'n' },
-        { "file",      required_argument, NULL, 'f' },
-        { "allow-204", no_argument,       NULL, 'a' },
-        { "help",      no_argument,       NULL, 'h' },
-        { NULL,        0,                 NULL,  0  }
+        { "server",      required_argument, NULL, 's' },
+        { "port",        required_argument, NULL, 'p' },
+        { "name",        required_argument, NULL, 'n' },
+        { "file",        required_argument, NULL, 'f' },
+        { "preview_len", required_argument, NULL, 'l' },
+        { "allow-204",   no_argument,       NULL, 'a' },
+        { "help",        no_argument,       NULL, 'h' },
+        { NULL,          0,                 NULL,  0  }
     };
 
     while ((opt = getopt_long(argc, argv, optstr, longopts, NULL)) != -1) {
@@ -68,6 +70,9 @@ int main(int argc, char **argv)
         case 'a':
             allow_204 = 1;
             break;
+        case 'l':
+            preview_len = atoi(optarg);
+            break;
         case 'h':
             usage();
             exit(EXIT_SUCCESS);
@@ -86,10 +91,6 @@ int main(int argc, char **argv)
     if ((err = ic_query_init(&q)) < 0) {
         printf("%s\n", ic_strerror(err));
         exit(1);
-    }
-
-    if (allow_204) {
-        ic_allow_204(&q);
     }
 
     if (!port) {
@@ -117,6 +118,10 @@ int main(int argc, char **argv)
         size_t body_len;
 
         ic_reuse_connection(&q, 0);
+        if (allow_204) {
+            ic_allow_204(&q);
+            ic_set_preview_len(&q, preview_len);
+        }
 
         if (!service) {
             fprintf(stderr, "ICAP service is not set\n");
@@ -178,7 +183,7 @@ int main(int argc, char **argv)
         rc = ic_send_respmod(&q);
         if (rc == 1) {
 #if 0
-            const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+            const unsigned char *body_2 = "+TANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
             ic_reuse_connection(&q, 1);
 
             if ((err = ic_set_body(&q, body_2, 34)) == -1) {
@@ -186,7 +191,20 @@ int main(int argc, char **argv)
                 goto out;
             }
 
-            ic_send_respmod(&q);
+            if (ic_send_respmod(&q) == 0) {
+
+                size_t ctx_len;
+                const char *ctx = ic_get_content(&q, &ctx_len, &err);
+
+                if (ctx) {
+                    unlink("/tmp/content");
+                    int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
+                    write(fd, ctx, ctx_len);
+                    close(fd);
+                } else {
+                    printf("%s\n", ic_strerror(err));
+                }
+            }
 #endif
         } else if (rc == 0) {
             size_t ctx_len;
@@ -236,5 +254,6 @@ void usage()
     printf("-n, --name   <name>        ICAP service name\n");
     printf("-f, --file   <path>        send file to ICAP service\n");
     printf("-a, --allow-204            include Allow: 204\n");
+    printf("-l, --preview-len          set preview length\n");
     printf("-h, --help                 print this help\n");
 }
