@@ -7,9 +7,11 @@
 extern "C" {
 #endif
 
+#define IC_CODE_CONTINUE    100
 #define IC_CODE_OK          200
 #define IC_CODE_NO_CONTENT  204
 #define IC_CODE_BAD_REQUEST 400
+#define IC_CODE_REQ_TIMEOUT 408
 
 typedef struct ic_query {
     void *data;
@@ -43,6 +45,7 @@ void ic_disconnect(ic_query_t *q);
 void ic_query_deinit(ic_query_t *q);
 
 const char *ic_strerror(int err);
+int ic_enable_debug(ic_query_t *q, const char *path);
 
 int ic_get_status_code(ic_query_t *q);
 const char *ic_get_icap_hdr(ic_query_t *q);

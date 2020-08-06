@@ -35,7 +35,7 @@ int main(int argc, char **argv)
         { "port",        required_argument, NULL, 'p' },
         { "name",        required_argument, NULL, 'n' },
         { "file",        required_argument, NULL, 'f' },
-        { "preview_len", required_argument, NULL, 'l' },
+        { "preview-len", required_argument, NULL, 'l' },
         { "allow-204",   no_argument,       NULL, 'a' },
         { "help",        no_argument,       NULL, 'h' },
         { NULL,          0,                 NULL,  0  }
@@ -93,6 +93,8 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    ic_enable_debug(&q, "/tmp/icap_debug");
+
     if (!port) {
         port = 1344;
     }
@@ -118,6 +120,7 @@ int main(int argc, char **argv)
         size_t body_len;
 
         ic_reuse_connection(&q, 0);
+        ic_enable_debug(&q, "/tmp/icap_debug");
         if (allow_204) {
             ic_allow_204(&q);
             ic_set_preview_len(&q, preview_len);
@@ -163,8 +166,13 @@ int main(int argc, char **argv)
         }
 #endif
 #if 0
-        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
+        /*if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
                         "Content-Length: 68\r\n\r\n")) == -1) {
+            fprintf(stderr, "Out of memory\n");
+            goto out;
+        }*/
+        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
+                        "Content-Length: 102422\r\n\r\n")) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
@@ -174,7 +182,7 @@ int main(int argc, char **argv)
             printf("%s\n", ic_strerror(err));
             goto out;
         }
-
+        //printf("body_len:%zu\n", body_len);
         if ((err = ic_set_body(&q, body, body_len)) == -1) {
             printf("%s\n", ic_strerror(err));
             goto out;
@@ -183,10 +191,40 @@ int main(int argc, char **argv)
         rc = ic_send_respmod(&q);
         if (rc == 1) {
 #if 0
-            const unsigned char *body_2 = "+TANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+        /*    const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
             ic_reuse_connection(&q, 1);
 
             if ((err = ic_set_body(&q, body_2, 34)) == -1) {
+                printf("%s\n", ic_strerror(err));
+                goto out;
+            }*/
+            ic_reuse_connection(&q, 1);
+
+            struct stat info2;
+            unsigned char *body2 = NULL;
+            size_t body_len2;
+            int fd2;
+
+            memset(&info2, 0, sizeof(info2));
+
+            if (stat("/tmp/icap", &info2) == -1) {
+                goto out;
+            }
+            body_len2 = info2.st_size;
+            if ((body2 = malloc(body_len2)) == NULL) {
+                fprintf(stderr, "Out of memory\n");
+                goto out;
+            }
+
+            if ((fd2 = open("/tmp/icap", O_RDONLY)) == -1) {
+                goto out;
+            }
+
+            if (read(fd2, body2, body_len2) == -1) {
+                goto out;
+            }
+
+            if ((err = ic_set_body(&q, body2, body_len2)) == -1) {
                 printf("%s\n", ic_strerror(err));
                 goto out;
             }
@@ -205,6 +243,7 @@ int main(int argc, char **argv)
                     printf("%s\n", ic_strerror(err));
                 }
             }
+            free(body2);
 #endif
         } else if (rc == 0) {
             size_t ctx_len;

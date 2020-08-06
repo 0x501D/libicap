@@ -43,6 +43,10 @@ typedef struct ic_cl_ctx {
     uint64_t content_len;
     uint64_t total_sended;
     uint64_t preview_msg_len;
+    uint64_t rest_body_len;
+    uint64_t non_body_ctx;
+    uint64_t non_body_ctx_preview;
+    uint64_t non_body_ctx_after_preview;
     int64_t icap_hdr_len;
     unsigned char *req_hdr; /* REQMOD header */
     unsigned char *res_hdr; /* RESPMOD header */
@@ -78,12 +82,18 @@ typedef struct ic_query_int {
     char *srv_addr;
     char *service;
     char *uri;
+    char *debug_path;
     unsigned int preview_mode:1;
     unsigned int preview_sended:1;
     unsigned int icap_hdr_sended:1;
     unsigned int http_hdr_sended:1;
     unsigned int origin_fit_preview:1;
     unsigned int preview_non_complete:1;
+    unsigned int preview_data_eof:1;
+    unsigned int preview_header_sended:1;
+    unsigned int preview_only_hdr:1;
+    unsigned int outside_preview:1;
+    unsigned int non_body_extracted:1;
     unsigned int after_prew_hex_done:1; /* After preview mode, chunk data was added */
 } ic_query_int_t;
 
@@ -127,7 +137,8 @@ IC_EXPORT const char *ic_err_msg[] = {
     "Incorrect ICAP header",
     "Bad request",
     "Cannot get methods list from server response",
-    "Connection to ICAP service is closed"
+    "Connection to ICAP service is closed",
+    "Request timeout"
 };
 
 IC_EXPORT int ic_query_init(ic_query_t *q)
@@ -176,6 +187,8 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
     icap->cl.payload_len = 0;
     icap->cl.total_sended = 0;
     icap->srv.payload_len = 0;
+    icap->cl.preview_msg_len = 0;
+    icap->non_body_extracted = 0;
 
     if (!proceed) {
         icap->cl.type = 0;
@@ -195,6 +208,7 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
         IC_FREE(icap->service);
         IC_FREE(icap->uri);
         IC_FREE(icap->cl.icap_hdr);
+        IC_FREE(icap->debug_path);
     }
 
     IC_FREE(icap->cl.payload);
@@ -394,6 +408,24 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
 
     return 0;
 }
+IC_EXPORT int ic_enable_debug(ic_query_t *q, const char *path)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    IC_FREE(icap->debug_path);
+
+    icap->debug_path = strdup(path);
+
+    if (!icap->debug_path) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    return 0;
+}
 
 IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
         size_t len)
@@ -535,20 +567,24 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     char *p = NULL;
     ic_str_t hex, rest_hex;
     int add_preview_ieof = 0;
-    int add_rest_hex = 0;
+    int add_eof_chunk = 0;
     int add_zero_chunk = 0;
-    int add_crlf = 1;
-    size_t http_hdr_len = (icap->http_hdr_sended) ? 0 :
-        (icap->cl.req_hdr_len + icap->cl.res_hdr_len);
+    int add_crlf = 0;
+    int add_rest_body = 0;
+    size_t preview_body_size = 0;
+    ic_debug(icap->debug_path, "<<<%s called >>>\n", __func__);
 
     memset(&hex, 0, sizeof(hex));
     memset(&rest_hex, 0, sizeof(rest_hex));
+    icap->cl.non_body_ctx_preview = 0;
 
     if (!icap) {
         return -IC_ERR_QUERY_NULL;
     }
 
     icap->method = IC_METHOD_ID_RESP;
+    icap->cl.non_body_ctx = 0;
+    icap->cl.non_body_ctx_after_preview = 0;
 
     if (!icap->cl.icap_hdr_len) {
         if ((err = ic_create_uri(icap)) != 0) {
@@ -560,21 +596,19 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
     }
 
-    if (icap->preview_mode) {
-        if (icap->cl.req_hdr_len + icap->cl.res_hdr_len + icap->cl.content_len <=
-                icap->cl.opts.preview_len) {
-            icap->origin_fit_preview = 1;
-        }
-    }
-
     if (!icap->icap_hdr_sended) {
         icap->cl.payload_len += icap->cl.icap_hdr_len;
+        icap->cl.non_body_ctx_preview += icap->cl.icap_hdr_len;
     }
 
-    if (!icap->http_hdr_sended) {
+    if (!icap->preview_mode && !icap->http_hdr_sended) {
         icap->cl.payload_len += icap->cl.req_hdr_len + icap->cl.res_hdr_len;
+        icap->cl.non_body_ctx += icap->cl.payload_len;
     }
+
     icap->cl.payload_len += icap->cl.body_len;
+    size_t cur_body_len = icap->cl.body_sended + icap->cl.body_len;
+    size_t total_http_hdr_len = icap->cl.req_hdr_len + icap->cl.res_hdr_len;
 
     if (icap->cl.type == IC_CTX_TYPE_CL) {
         if (!icap->preview_mode) {
@@ -584,36 +618,91 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
                     return rc;
                 }
                 icap->cl.payload_len += hex.len; /* <HEX>\r\n  chunk start */
-            }
-            if ((icap->cl.body_sended + icap->cl.body_len) == icap->cl.content_len) {
-                icap->cl.payload_len += 7;       /* \r\n0\r\n\r\n chunk end */
-                add_zero_chunk = 1;
+                icap->cl.non_body_ctx += hex.len;
             }
         }
 
+        if (cur_body_len == icap->cl.content_len) {
+            icap->cl.payload_len += sizeof(IC_CHUNK_IEOF) - 1;
+            icap->cl.non_body_ctx += sizeof(IC_CHUNK_IEOF) - 1;
+            icap->cl.non_body_ctx_after_preview += sizeof(IC_CHUNK_IEOF) - 1;
+            add_eof_chunk = 1;
+        }
+
         if (icap->preview_mode && !icap->preview_sended) {
-            if (icap->origin_fit_preview) {
-                icap->cl.preview_msg_len = http_hdr_len + icap->cl.body_len;
-                if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.body_len)) != 0) {
-                    return rc;
-                }
-                icap->cl.payload_len += hex.len; /* <HEX>\r\n  chunk start */
-                icap->cl.preview_msg_len += hex.len;
-                if ((icap->cl.body_sended + icap->cl.body_len) == icap->cl.content_len) {
-                    icap->cl.payload_len += 13; /*\r\n0; ieof\r\n\r\n*/
-                    icap->cl.preview_msg_len += 13;
-                    add_preview_ieof = 1;
-                } else { /* just add CRLF */
-                    icap->cl.payload_len += 2;
-                    icap->cl.preview_msg_len += 2;
-                    add_crlf = 1;
-                }
+            if (!icap->preview_header_sended) {
+                icap->cl.preview_msg_len += total_http_hdr_len;
+                icap->cl.payload_len += total_http_hdr_len;
+                icap->cl.non_body_ctx_preview += total_http_hdr_len;
+            }
+
+            if (icap->preview_only_hdr) {
+                icap->cl.preview_msg_len += sizeof(IC_ZERO_CHUNK) - 1;
+                icap->cl.non_body_ctx += sizeof(IC_ZERO_CHUNK) - 1;
             } else {
-                if (icap->cl.preview_sended_len + http_hdr_len + icap->cl.body_len >
-                        icap->cl.opts.preview_len) {
-                    icap->cl.payload_len = icap->cl.opts.preview_len;
+                if (cur_body_len <= icap->cl.opts.preview_len) {
+                    if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.body_len)) != 0) {
+                        return rc;
+                    }
+                    icap->cl.payload_len += hex.len;
+                    icap->cl.preview_msg_len += hex.len;
+                    icap->cl.non_body_ctx_preview += hex.len;
+                    add_rest_body = 0;
+
+                    if (cur_body_len == icap->cl.content_len) {
+                        /* Current body fits preview, add eiof */
+                        ic_debug(icap->debug_path, "Current body fits preview, add eiof\n");
+                        icap->cl.payload_len += sizeof(IC_PREVIEW_IEOF) - 1;
+                        icap->cl.preview_msg_len += sizeof(IC_PREVIEW_IEOF) - 1;
+                        icap->cl.non_body_ctx_preview += sizeof(IC_PREVIEW_IEOF) - 1;
+                        add_preview_ieof = 1;
+                        icap->preview_data_eof = 1;
+                        preview_body_size = icap->cl.body_len;
+                        icap->cl.preview_msg_len += preview_body_size;
+                    } else {
+                        /* Current body is not reach preview len, just add CRLF */
+                        ic_debug(icap->debug_path, "Current body is not reach preview len, just add CRLF\n");
+                        icap->cl.payload_len += sizeof(IC_CRLF) - 1;
+                        icap->cl.preview_msg_len += sizeof(IC_CRLF) - 1;
+                        icap->cl.non_body_ctx_preview += sizeof(IC_CRLF) - 1;
+                        add_crlf = 1;
+                        preview_body_size = icap->cl.body_len;
+                        icap->cl.preview_msg_len += preview_body_size;
+                    }
+                } else {
+                    ic_debug(icap->debug_path, "Current body exceeded preview len\n");
+                    add_zero_chunk = 1;
+                    icap->cl.preview_msg_len += sizeof(IC_CHUNK_IEOF) - 1;
+                    icap->cl.payload_len += sizeof(IC_CHUNK_IEOF) - 1;
+                    icap->cl.non_body_ctx_preview += sizeof(IC_CHUNK_IEOF) - 1;
+                    icap->preview_data_eof = 1;
+                    preview_body_size = icap->cl.opts.preview_len - icap->cl.body_sended;
+                    if ((rc = ic_str_format_cat(&hex, "%lx\r\n", preview_body_size)) != 0) {
+                        return rc;
+                    }
+                    icap->cl.payload_len += hex.len;
+                    icap->cl.preview_msg_len += hex.len;
+                    icap->cl.non_body_ctx_preview += hex.len;
+                    icap->cl.preview_msg_len += preview_body_size;
+                    add_rest_body = 1;
+                    if ((rc = ic_str_format_cat(&rest_hex, "%lx\r\n",
+                                    icap->cl.content_len - (preview_body_size + icap->cl.body_sended)) != 0)) {
+                            return rc;
+                    }
+                    icap->cl.payload_len += rest_hex.len; /* <HEX>\r\n  chunk start */
+                    icap->cl.non_body_ctx_after_preview += rest_hex.len;
+                    ic_debug(icap->debug_path, "preview_body_size: %zu\n", preview_body_size);
                 }
             }
+        } else if (icap->preview_mode && icap->preview_sended) {
+            ic_debug(icap->debug_path, "*** preview mode: add rest data: %zu %zu %zu\n",
+                    icap->cl.body_len, icap->cl.content_len, icap->cl.body_sended);
+            icap->cl.payload_len = icap->cl.body_len;
+            if (add_eof_chunk) {
+                icap->cl.payload_len += sizeof(IC_CHUNK_IEOF) - 1;
+                icap->cl.non_body_ctx += sizeof(IC_CHUNK_IEOF) - 1;
+            }
+            icap->outside_preview = 1;
         }
 
         IC_FREE(icap->cl.payload);
@@ -622,16 +711,19 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
             return -IC_ERR_ENOMEM;
         }
 
-        printf("*** start making payload ***\n");
+        ic_debug(icap->debug_path, "plen: %zu, msg: %zu\n",
+                icap->cl.payload_len, icap->cl.preview_msg_len);
+
+        ic_debug(icap->debug_path, "*** start making payload ***\n");
         p = icap->cl.payload;
         if (!icap->icap_hdr_sended) {
-            printf("add icap header\n");
+            ic_debug(icap->debug_path, "add icap header\n");
             memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
             p += icap->cl.icap_hdr_len;
         }
 
-        if (!icap->http_hdr_sended) {
-            printf("add http headers\n");
+        if (!icap->http_hdr_sended && !icap->preview_mode) {
+            ic_debug(icap->debug_path, "add http headers [non in preview]\n");
             if (icap->cl.req_hdr_len) {
                 memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
                 p += icap->cl.req_hdr_len;
@@ -643,46 +735,89 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
             }
         }
 
-        if (!icap->preview_mode && !icap->cl.body_sended) {
-            printf("no preview mode: add hex\n");
+        if (icap->preview_mode && !icap->preview_header_sended) {
+            ic_debug(icap->debug_path, "add http headers [in preview]\n");
+            if (icap->cl.req_hdr_len) {
+                memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
+                p += icap->cl.req_hdr_len;
+            }
+
+            if (icap->cl.res_hdr_len) {
+                memcpy(p, icap->cl.res_hdr, icap->cl.res_hdr_len);
+                p += icap->cl.res_hdr_len;
+            }
+        }
+
+        if (!icap->preview_mode && !icap->cl.body_sended && icap->cl.content_len != 0) {
+            ic_debug(icap->debug_path, "no preview mode: add hex\n");
             memcpy(p, hex.data, hex.len);
             p += hex.len;
         }
 
-        if (!icap->preview_mode) {
-            printf("no preview mode: add body\n");
+        if (!icap->preview_mode && icap->cl.body_len) {
+            ic_debug(icap->debug_path, "no preview mode: add body\n");
             memcpy(p, icap->cl.body, icap->cl.body_len);
 
-            if (add_zero_chunk) {
-                printf("no preview mode: add zero chunk\n");
+            if (add_eof_chunk) {
+                ic_debug(icap->debug_path, "no preview mode: add zero chunk\n");
                 p += icap->cl.body_len;
-                memcpy(p, IC_CRLF IC_CHUNK_IEOF, 7);
+                memcpy(p, IC_CHUNK_IEOF, sizeof(IC_CHUNK_IEOF) - 1);
             }
         } else if (icap->preview_mode && !icap->preview_sended) {
-            printf("preview mode: add hex\n");
-            memcpy(p, hex.data, hex.len);
-            p += hex.len;
-            if (icap->origin_fit_preview) {
-                printf("preview mode: add body\n");
-                memcpy(p, icap->cl.body, icap->cl.body_len);
-                p += icap->cl.body_len;
+            if (icap->preview_only_hdr) {
+                memcpy(p, IC_ZERO_CHUNK, sizeof(IC_ZERO_CHUNK) - 1);
+            } else if (icap->cl.body_len) {
+                ic_debug(icap->debug_path, "preview mode: add hex: %s", hex.data);
+                memcpy(p, hex.data, hex.len);
+                p += hex.len;
+                ic_debug(icap->debug_path, "preview mode: add body: %zu\n", preview_body_size);
+                memcpy(p, icap->cl.body, preview_body_size);
+                p += preview_body_size;
                 if (add_preview_ieof) {
-                    printf("preview mode: add preview ieof\n");
+                    ic_debug(icap->debug_path, "preview mode: add preview ieof\n");
                     memcpy(p, IC_PREVIEW_IEOF, sizeof(IC_PREVIEW_IEOF) - 1);
+                    p += sizeof(IC_PREVIEW_IEOF) - 1;
                 } else if (add_crlf) {
-                    printf("preview mode: add crlf\n");
+                    ic_debug(icap->debug_path, "preview mode: add crlf\n");
                     memcpy(p, IC_CRLF, sizeof(IC_CRLF) - 1);
+                } else if (add_zero_chunk) {
+                    ic_debug(icap->debug_path, "preview mode: add zero chunk\n");
+                    memcpy(p, IC_CHUNK_IEOF , sizeof(IC_CHUNK_IEOF) - 1);
+                    p += sizeof(IC_CHUNK_IEOF) - 1;
                 }
-            } else {
-                //... do some stuff
+                if (add_rest_body) {
+                    icap->cl.rest_body_len = icap->cl.body_len - preview_body_size;
+                    if (!icap->after_prew_hex_done) {
+                        ic_debug(icap->debug_path, "preview mode: add hex for rest body: %s", rest_hex.data);
+                        memcpy(p, rest_hex.data, rest_hex.len);
+                        p += rest_hex.len;
+                        icap->after_prew_hex_done = 1;
+                    }
+                    ic_debug(icap->debug_path, "add rest body: offset: %zu len: %zu\n",
+                            preview_body_size, icap->cl.rest_body_len);
+                    memcpy(p, icap->cl.body + preview_body_size, icap->cl.rest_body_len);
+                    p += icap->cl.rest_body_len;
+                    if (add_eof_chunk) {
+                        ic_debug(icap->debug_path, "preview mode: add zero chunk\n");
+                        memcpy(p, IC_CHUNK_IEOF, sizeof(IC_CHUNK_IEOF) - 1);
+                    }
+                }
             }
 
-            int fd = open("/tmp/preview_mode", O_CREAT | O_WRONLY, 0666);
+            /*int fd = open("/tmp/preview_mode", O_CREAT | O_WRONLY, 0666);
             write(fd, icap->cl.payload, icap->cl.payload_len);
-            close(fd);
+            close(fd); XXX remove after alfa version */
+        } else if (icap->preview_mode && icap->preview_sended) {
+            ic_debug(icap->debug_path, "add body part: %zu\n", icap->cl.body_len);
+            memcpy(p, icap->cl.body, icap->cl.body_len);
+            if (add_eof_chunk) {
+                ic_debug(icap->debug_path, "preview mode: add zero chunk\n");
+                p += icap->cl.body_len;
+                memcpy(p, IC_CHUNK_IEOF, sizeof(IC_CHUNK_IEOF) - 1);
+            }
         }
 
-        printf("*** end making payload ***\n");
+        ic_debug(icap->debug_path, "*** end making payload ***\n");
     }
 
     rc = ic_poll_icap(icap);
@@ -918,8 +1053,15 @@ static int ic_create_header(ic_query_int_t *q)
                     if (q->cl.opts.preview_len > q->srv.opts.preview_len) {
                         q->cl.opts.preview_len = q->srv.opts.preview_len;
                     }
+                    rc += ic_str_format_cat(&preview, "Preview: %u\r\n", q->cl.opts.preview_len);
+                } else {
+                    /* This indicates that the ICAP client will send only the encapsulated
+                    header sections to the ICAP server, then it will send a zero-length
+                    chunk and stop and wait for a "go ahead" to send more encapsulated
+                    body bytes to the ICAP server. */
+                    q->preview_only_hdr = 1;
+                    rc += ic_str_format_cat(&preview, "Preview: 0\r\n");
                 }
-                rc += ic_str_format_cat(&preview, "Preview: %u\r\n", q->cl.opts.preview_len);
                 q->preview_mode = 1;
             }
 
@@ -974,38 +1116,42 @@ static int ic_poll_icap(ic_query_int_t *q)
             return -IC_ERR_SRV_TIMEOUT;
         default:
             if (FD_ISSET(q->sd, &rset)) {
-                printf(">>> read\n");
+                ic_debug(q->debug_path, ">>> read\n");
                 rc = ic_read_from_service(q);
 
                 switch (rc) {
                 case 0: /* read done */
-                    printf(">>> read done\n");
+                    ic_debug(q->debug_path, ">>> read done\n");
                     done = 1;
                     break;
                 case 1: /* read more */
-                    printf(">>> read more\n");
+                    ic_debug(q->debug_path, ">>> read more\n");
+                    break;
+                case 2: /* 100 continue */
+                    ic_debug(q->debug_path, ">>> 100 continue\n");
+                    send_done = 0;
                     break;
                 default: /* read error */
-                    printf(">>> read error\n");
+                    ic_debug(q->debug_path, ">>> read error\n");
                     return rc;
                 }
             }
 
             if (FD_ISSET(q->sd, &wset)) {
-                printf(">>> write\n");
+                ic_debug(q->debug_path, ">>> write\n");
                 rc = ic_send_to_service(q);
 
                 switch (rc) {
                 case 0: /* write done */
-                    printf(">>> write done\n");
+                    ic_debug(q->debug_path, ">>> write done\n");
                     send_done = 1;
                     break;
                 case 1: /* do not need to read */
-                    printf(">>> do not need to read\n");
+                    ic_debug(q->debug_path, ">>> do not need to read\n");
                     done = 1;
                     break;
                 case 2: /* write more */
-                    printf(">>> write more\n");
+                    ic_debug(q->debug_path, ">>> write more\n");
                     break;
                 default:
                     return rc;
@@ -1020,58 +1166,81 @@ static int ic_poll_icap(ic_query_int_t *q)
 static int ic_send_to_service(ic_query_int_t *q)
 {
     ssize_t sended = 0;
+    ssize_t all_sended = 0;
+    ic_debug(q->debug_path, "q->cl.non_body_ctx_preview = %zu\n",
+            q->cl.non_body_ctx_preview);
+    ic_debug(q->debug_path, "q->cl.non_body_ctx_after_preview = %zu\n",
+            q->cl.non_body_ctx_after_preview);
 
     do {
+        ic_debug(q->debug_path, "*** write cycle ***\n");
         size_t send_len = 0;
         if (!q->icap_hdr_sended) {
             /* Send only ICAP header */
             send_len = q->cl.icap_hdr_len;
-            printf("Send ICAP hdr: %zu\n", send_len);
+            ic_debug(q->debug_path, "Send ICAP hdr: %zu\n", send_len);
         } else if (q->preview_mode && !q->preview_sended) {
             /* Send only preview data */
             send_len = q->cl.preview_msg_len;
-            printf("Send preview data: %zu\n", send_len);
+            ic_debug(q->debug_path, "Send preview data: %zu\n", send_len);
         } else {
             /* Send all payload */
+            ic_debug(q->debug_path, "payload_len: %zu\n", q->cl.payload_len);
+            ic_debug(q->debug_path, "total_sended: %zu\n", q->cl.total_sended);
             send_len = q->cl.payload_len - q->cl.total_sended;
-            printf("Send payload data: %zu\n", send_len);
+            ic_debug(q->debug_path, "Send payload data: %zu\n", send_len);
         }
-
         sended = send(q->sd, q->cl.payload + q->cl.total_sended,
                 send_len, 0);
+
         if (sended > 0) {
             q->cl.total_sended += sended;
-            if (q->preview_mode && !q->preview_sended) {
-                q->cl.preview_sended_len += q->cl.preview_msg_len;
+            all_sended += sended;
+            ic_debug(q->debug_path, "all_sended = %zu\n", all_sended);
+        }
+
+        if (q->icap_hdr_sended && q->preview_mode && !q->preview_sended) {
+            if (q->preview_data_eof) {
+                ic_debug(q->debug_path, "all preview sended\n");
+                q->preview_sended = 1;
+                break;
+            }
+            if (!q->preview_non_complete) {
+                if (q->cl.total_sended - q->cl.icap_hdr_len == q->cl.preview_msg_len) {
+                    ic_debug(q->debug_path, "send first preview chunk\n");
+                    break;
+                }
+            } else {
+                if (q->cl.total_sended == q->cl.preview_msg_len) {
+                    ic_debug(q->debug_path, "send other preview chunk\n");
+                    break;
+                }
             }
         }
 
         if (!q->icap_hdr_sended) {
             if (q->cl.total_sended == (uint64_t) q->cl.icap_hdr_len) { /* cannot be negative */
-                printf("ICAP hdr sended\n");
+                ic_debug(q->debug_path, "ICAP hdr sended\n");
                 q->icap_hdr_sended = 1;
             }
         }
 
-        if (!q->http_hdr_sended && sended) {
-            if (q->cl.total_sended - q->cl.icap_hdr_len >=
-                    (q->cl.req_hdr_len + q->cl.res_hdr_len)) {
-                q->http_hdr_sended = 1;
-                printf("HTTP hdr sended\n");
+        if (q->icap_hdr_sended && q->preview_mode && !q->preview_sended) {
+            q->cl.preview_sended_len += q->cl.preview_msg_len;
+            if (!q->preview_header_sended) {
+                if (q->cl.preview_sended_len >= (q->cl.req_hdr_len + q->cl.res_hdr_len)) {
+                    q->preview_header_sended = 1;
+                    ic_debug(q->debug_path, "header sended in preview\n");
+                }
             }
         }
 
-        if (q->icap_hdr_sended && q->preview_mode && !q->preview_sended) {
-            if (!q->preview_non_complete) {
-                if (q->cl.total_sended - q->cl.icap_hdr_len == q->cl.preview_msg_len) {
-                    printf("Catch first!\n");
-                    break;
-                }
-            } else {
-                if (q->cl.total_sended == q->cl.preview_msg_len) {
-                    printf("Catch other!\n");
-                    break;
-                }
+        if (q->method != IC_METHOD_ID_OPTS && !q->preview_mode &&
+                !q->http_hdr_sended && sended) {
+            if (q->cl.total_sended - q->cl.icap_hdr_len >=
+                    (q->cl.req_hdr_len + q->cl.res_hdr_len)) {
+                q->http_hdr_sended = 1;
+                ic_debug(q->debug_path, "HTTP hdr sended\n");
             }
         }
 
@@ -1079,33 +1248,68 @@ static int ic_send_to_service(ic_query_int_t *q)
             return -IC_ERR_SEND;
         }
     } while (sended > 0);
-    printf("total sended: %lu\n", q->cl.total_sended);
 
     /* All payload was sended but not all content available now */
     if (q->cl.type == IC_CTX_TYPE_CL) {
-        q->cl.body_sended += q->cl.body_len;
+        if (!q->preview_mode) {
+            if ((uint64_t) all_sended > q->cl.non_body_ctx) {
+                if (!q->non_body_extracted) {
+                    q->cl.body_sended += all_sended - q->cl.non_body_ctx;
+                    q->non_body_extracted = 1;
+                } else {
+                    q->cl.body_sended += all_sended;
+                }
+            }
+        } else {
+            if (sended < 0) {
+                q->cl.body_sended += all_sended;
+                if (q->cl.body_sended != q->cl.content_len) {
+                    ic_debug(q->debug_path, "wrire more after EAGAIN\n");
+                    return 2;
+                }
+            }
+            if (q->srv.rc == IC_CODE_CONTINUE) {
+                q->cl.non_body_ctx_preview = q->cl.non_body_ctx_after_preview;
+                q->cl.body_sended -= q->cl.non_body_ctx_after_preview;
+            }
+            if (!q->non_body_extracted) {
+                q->cl.body_sended += all_sended - q->cl.non_body_ctx_preview;
+                q->non_body_extracted = 1;
+            } else {
+                q->cl.body_sended += all_sended;
+            }
+        }
+
         if (!q->preview_mode && q->cl.total_sended == q->cl.payload_len) {
 
             /* Do now wait for the ICAP server response if not all chunk data sended */
-            printf("Do now wait for the ICAP server response if not all chunk data sended\n");
             if (q->cl.body_sended != q->cl.content_len) {
+                ic_debug(q->debug_path,
+                        "Do now wait for the ICAP server response if not all chunk data sended\n");
                 return 1;
             }
         }
         if (q->preview_mode && !q->preview_sended) {
-            printf("q->cl.body_sended: %zu, cl: %zu\n", q->cl.body_sended, q->cl.content_len);
-            if (q->origin_fit_preview && q->cl.body_sended != q->cl.content_len) {
-                printf("Not all preview data was sended\n");
+            ic_debug(q->debug_path, "q->cl.body_sended: %zu, cl: %zu\n",
+                    q->cl.body_sended, q->cl.content_len);
+            if (q->cl.body_sended != q->cl.content_len) {
+                ic_debug(q->debug_path, "Not all preview data was sended\n");
                 if (!q->preview_non_complete) {
                     q->preview_non_complete = 1;
                 }
                 return 1;
             }
+        } else if (!q->outside_preview && q->preview_mode && q->preview_sended &&
+                (q->cl.payload_len == q->cl.total_sended && (q->cl.body_sended != q->cl.content_len))) {
+            ic_debug(q->debug_path, "plen: %zu, tot: %zu\n", q->cl.payload_len, q->cl.total_sended);
+            ic_debug(q->debug_path, "cl.body_sended= %zu\n", q->cl.body_sended);
+            ic_debug(q->debug_path, "Send more data after 100 continue\n");
+            return 1;
         }
     }
 
     /* Not all payload was sended, wait for select(2) writefds available */
-    if (q->cl.total_sended != q->cl.payload_len) {
+    if (!q->preview_mode && q->cl.total_sended != q->cl.payload_len) {
         return 2;
     }
 
@@ -1116,6 +1320,7 @@ static int ic_read_from_service(ic_query_int_t *q)
 {
     ssize_t nread;
     int rc = 1;
+    int n = 0;
 
     do {
         if (q->srv.payload_len + IC_SRV_READ_LEN >= q->srv.n_alloc) {
@@ -1133,7 +1338,7 @@ static int ic_read_from_service(ic_query_int_t *q)
         if (nread > 0) {
             q->srv.payload_len += nread;
         }
-        printf("read data %zd, total:%zd\n", nread, q->srv.payload_len);
+        ic_debug(q->debug_path, "read data %zd, total:%zd\n", nread, q->srv.payload_len);
 
         if (nread < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             return -IC_ERR_SEND;
@@ -1142,28 +1347,32 @@ static int ic_read_from_service(ic_query_int_t *q)
         }
     } while (nread > 0);
 
-    /* XXX what if we do not get ICAP header now, only part of it ? */
-    //if (!q->srv.got_hdr) {
-        int n = 0;
-        if ((n = ic_parse_response(q)) != 0) {
-            return n;
-        }
-        printf("got ICAP header, rc = %d\n", q->srv.rc);
-        q->srv.got_hdr = 1;
-        if (q->srv.rc == IC_CODE_NO_CONTENT) {
-            rc = 0;
-        }
-    //}
+    if ((n = ic_parse_response(q)) != 0) {
+        return n;
+    }
+    ic_debug(q->debug_path, "got ICAP header, rc = %d\n", q->srv.rc);
+    q->srv.got_hdr = 1;
+    if (q->srv.rc == IC_CODE_NO_CONTENT) {
+        rc = 0;
+    } else if (q->srv.rc == IC_CODE_CONTINUE) {
+        /* must clear all srv data */
+        ic_debug(q->debug_path, "clear srv data after 100 continue\n");
+        memset(q->srv.payload, 0x0, q->srv.payload_len);
+        q->srv.payload_len = 0;
+        rc = 2;
+    } else if (q->srv.rc == IC_CODE_REQ_TIMEOUT) {
+        return -IC_ERR_REQ_TIMEOUT;
+    }
 
     if (q->srv.null_body) {
-        printf("got NULL body\n");
+        ic_debug(q->debug_path, "got NULL body\n");
         rc = 0;
     } else {
         /* check for zero chunk */
         if (q->srv.payload_len > 7) {
             if (!memcmp(q->srv.payload + q->srv.payload_len - 7,
-                        IC_CRLF IC_CHUNK_IEOF , 7)) {
-                printf("zero chunk found\n");
+                        IC_CHUNK_IEOF , sizeof(IC_CHUNK_IEOF) - 1)) {
+                ic_debug(q->debug_path, "zero chunk found\n");
                 rc = 0;
             }
         }
@@ -1314,7 +1523,7 @@ static int ic_decode_chunked(ic_query_int_t *q)
 
             if (chunk_len == 0) {
                 /* zero chunk indicates eof */
-                printf("eof\n");
+                ic_debug(q->debug_path, "eof\n");
                 break;
             }
 

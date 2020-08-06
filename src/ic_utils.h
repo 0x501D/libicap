@@ -28,5 +28,7 @@ int ic_str_format(ic_str_t *str, const char *fmt, ...)
 int ic_str_format_cat(ic_str_t *str, const char *fmt, ...)
     __attribute__ ((format(printf, 2, 3)));
 void ic_str_free(ic_str_t *str);
+void ic_debug(const char *path, const char *fmt, ...)
+    __attribute__ ((format(printf, 2, 3)));
 
 #endif

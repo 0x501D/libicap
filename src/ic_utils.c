@@ -251,3 +251,22 @@ void ic_str_free(ic_str_t *str)
     str->alloc_bytes = 0;
     str->len = 0;
 }
+
+void ic_debug(const char *path, const char *fmt, ...)
+{
+    if (!path) {
+        return;
+    }
+
+    va_list args;
+    FILE *fp;
+
+    if ((fp = fopen(path, "a+")) == NULL)
+        return;
+
+    va_start(args, fmt);
+    vfprintf(fp, fmt, args);
+    va_end(args);
+
+    fclose(fp);
+}
