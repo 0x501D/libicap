@@ -182,7 +182,7 @@ int main(int argc, char **argv)
             printf("%s\n", ic_strerror(err));
             goto out;
         }
-        //printf("body_len:%zu\n", body_len);
+
         if ((err = ic_set_body(&q, body, body_len)) == -1) {
             printf("%s\n", ic_strerror(err));
             goto out;
@@ -250,8 +250,8 @@ int main(int argc, char **argv)
             const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
             if (ctx) {
-                unlink("/tmp/content");
-                int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
+                unlink("/tmp/content_ct");
+                int fd = open("/tmp/content_ct", O_CREAT|O_WRONLY, 0660);
                 write(fd, ctx, ctx_len);
                 close(fd);
             } else {
