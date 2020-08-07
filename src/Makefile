@@ -13,7 +13,7 @@ libicap.so: $(OBJ)
 	@$(CC) $< -MM -MT $(@:.d=.o) >$@
 
 demo:
-	$(MAKE) -C demo
+	$(MAKE) -C demo all
 
 clean_demo:
 	$(MAKE) -C demo clean
