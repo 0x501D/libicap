@@ -521,7 +521,7 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         return rc;
     }
 
-    *type = rc;
+    *type = icap->cl.type;
 
     return 0;
 }

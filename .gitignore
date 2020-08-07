@@ -1,5 +1,5 @@
 libicap.so
-ic_demo_ct
+ic_demo_cl
 ic_demo_raw
 ic_demo_chunked
 *.o
