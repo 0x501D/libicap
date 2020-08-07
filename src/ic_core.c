@@ -165,6 +165,7 @@ IC_EXPORT void ic_query_deinit(ic_query_t *q)
 
     free(icap->service);
     free(icap->uri);
+    free(icap->debug_path);
     free(icap->srv_addr);
     free(icap->cl.icap_hdr);
     free(icap->cl.payload);
@@ -565,17 +566,10 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
     char *p = NULL;
-    ic_str_t hex, rest_hex;
-    int add_preview_ieof = 0;
     int add_eof_chunk = 0;
-    int add_zero_chunk = 0;
-    int add_crlf = 0;
-    int add_rest_body = 0;
-    size_t preview_body_size = 0;
+
     ic_debug(icap->debug_path, "<<<%s called >>>\n", __func__);
 
-    memset(&hex, 0, sizeof(hex));
-    memset(&rest_hex, 0, sizeof(rest_hex));
     icap->cl.non_body_ctx_preview = 0;
 
     if (!icap) {
@@ -611,6 +605,16 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     size_t total_http_hdr_len = icap->cl.req_hdr_len + icap->cl.res_hdr_len;
 
     if (icap->cl.type == IC_CTX_TYPE_CL) {
+        ic_str_t hex, rest_hex;
+        int add_preview_ieof = 0;
+        int add_zero_chunk = 0;
+        int add_crlf = 0;
+        int add_rest_body = 0;
+        size_t preview_body_size = 0;
+
+        memset(&hex, 0, sizeof(hex));
+        memset(&rest_hex, 0, sizeof(rest_hex));
+
         if (!icap->preview_mode) {
             if (!icap->cl.body_sended) {
                 /* No preview mode just calc hex for all body */
@@ -650,8 +654,8 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
                     add_rest_body = 0;
 
                     if (cur_body_len == icap->cl.content_len) {
-                        /* Current body fits preview, add eiof */
-                        ic_debug(icap->debug_path, "Current body fits preview, add eiof\n");
+                        /* Current body fits preview, add ieof */
+                        ic_debug(icap->debug_path, "Current body fits preview, add ieof\n");
                         icap->cl.payload_len += sizeof(IC_PREVIEW_IEOF) - 1;
                         icap->cl.preview_msg_len += sizeof(IC_PREVIEW_IEOF) - 1;
                         icap->cl.non_body_ctx_preview += sizeof(IC_PREVIEW_IEOF) - 1;
@@ -818,11 +822,14 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         }
 
         ic_debug(icap->debug_path, "*** end making payload ***\n");
+        ic_str_free(&rest_hex);
+        ic_str_free(&hex);
+    } else if (icap->cl.type == IC_CTX_TYPE_CHUNKED) {
+        //...
     }
 
     rc = ic_poll_icap(icap);
 
-    ic_str_free(&hex);
     return rc;
 }
 
@@ -1237,12 +1244,13 @@ static int ic_send_to_service(ic_query_int_t *q)
             }
         }
 
-        if (q->method != IC_METHOD_ID_OPTS && !q->preview_mode &&
-                !q->http_hdr_sended && sended) {
-            if (q->cl.total_sended - q->cl.icap_hdr_len >=
-                    (q->cl.req_hdr_len + q->cl.res_hdr_len)) {
-                q->http_hdr_sended = 1;
-                ic_debug(q->debug_path, "HTTP hdr sended\n");
+        if (q->method != IC_METHOD_ID_OPTS) {
+            if (!q->preview_mode && !q->http_hdr_sended && sended) {
+                if (q->cl.total_sended - q->cl.icap_hdr_len >=
+                        (q->cl.req_hdr_len + q->cl.res_hdr_len)) {
+                    q->http_hdr_sended = 1;
+                    ic_debug(q->debug_path, "HTTP hdr sended\n");
+                }
             }
         }
 
@@ -1476,6 +1484,8 @@ static int ic_decode_chunked(ic_query_int_t *q)
     size_t body_len, content_len;
     char *p = q->srv.payload;
     char *begin, *dec;
+
+    ic_debug(q->debug_path, "start parsing chunked responce\n");
 
     /* find body offset */
     uint64_t http_hdr_len = ic_get_body_offset(q);

@@ -93,7 +93,7 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    ic_enable_debug(&q, "/tmp/icap_debug");
+    ic_enable_debug(&q, "/tmp/icap_debug_chunked");
 
     if (!port) {
         port = 1344;
@@ -118,9 +118,14 @@ int main(int argc, char **argv)
         struct stat info;
         int hdr_len;
         size_t body_len;
+        size_t payload_len = 0;
+        ssize_t chunk_len_sz, chunk_zero_sz;
+        char *chunk_len;
+        char *chunk_zero;
+        unsigned char *payload, *p;
 
         ic_reuse_connection(&q, 0);
-        ic_enable_debug(&q, "/tmp/icap_debug");
+        ic_enable_debug(&q, "/tmp/icap_debug_chunked");
         if (allow_204) {
             ic_allow_204(&q);
             ic_set_preview_len(&q, preview_len);
@@ -160,19 +165,7 @@ int main(int argc, char **argv)
         }
 #if 1
         if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: %zu\r\n\r\n", body_len)) == -1) {
-            fprintf(stderr, "Out of memory\n");
-            goto out;
-        }
-#endif
-#if 0
-        /*if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: 68\r\n\r\n")) == -1) {
-            fprintf(stderr, "Out of memory\n");
-            goto out;
-        }*/
-        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: 102422\r\n\r\n")) == -1) {
+                        "Transfer-Encoding: chunked\r\n\r\n")) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
@@ -182,8 +175,44 @@ int main(int argc, char **argv)
             printf("%s\n", ic_strerror(err));
             goto out;
         }
-        //printf("body_len:%zu\n", body_len);
-        if ((err = ic_set_body(&q, body, body_len)) == -1) {
+
+        if (resp_type != IC_CTX_TYPE_CHUNKED) {
+            fprintf(stderr, "Wrong HTTP traffic type\n");
+            exit(1);
+        }
+
+        payload_len = body_len;
+        if ((chunk_len_sz = asprintf(&chunk_len, "%lx\r\n", body_len)) == -1) {
+            fprintf(stderr, "Out of memory\n");
+            goto out;
+        }
+
+        payload_len += chunk_len_sz;
+
+        if ((chunk_zero_sz = asprintf(&chunk_zero, "\r\n0\r\n\r\n")) == -1) {
+            fprintf(stderr, "Out of memory\n");
+            goto out;
+        }
+
+        payload_len += chunk_zero_sz;
+
+        if ((payload = calloc(1, payload_len)) == NULL) {
+            fprintf(stderr, "Out of memory\n");
+            goto out;
+        }
+
+        p = payload;
+        memcpy(p, chunk_len, chunk_len_sz);
+        p += chunk_len_sz;
+        memcpy(p, body, body_len);
+        p += body_len;
+        memcpy(p, chunk_zero, chunk_zero_sz);
+
+        /*int pl_fd = open("/tmp/pl_test", O_CREAT | O_WRONLY, 0644);
+        write(pl_fd, payload, payload_len);
+        close(pl_fd);*/
+
+        if ((err = ic_set_body(&q, payload, payload_len)) == -1) {
             printf("%s\n", ic_strerror(err));
             goto out;
         }

@@ -93,7 +93,7 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    ic_enable_debug(&q, "/tmp/icap_debug");
+    ic_enable_debug(&q, "/tmp/icap_debug_cl");
 
     if (!port) {
         port = 1344;
@@ -120,7 +120,7 @@ int main(int argc, char **argv)
         size_t body_len;
 
         ic_reuse_connection(&q, 0);
-        ic_enable_debug(&q, "/tmp/icap_debug");
+        ic_enable_debug(&q, "/tmp/icap_debug_cl");
         if (allow_204) {
             ic_allow_204(&q);
             ic_set_preview_len(&q, preview_len);
@@ -255,8 +255,8 @@ int main(int argc, char **argv)
             const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
             if (ctx) {
-                unlink("/tmp/content_ct");
-                int fd = open("/tmp/content_ct", O_CREAT|O_WRONLY, 0660);
+                unlink("/tmp/content_cl");
+                int fd = open("/tmp/content_cl", O_CREAT|O_WRONLY, 0660);
                 write(fd, ctx, ctx_len);
                 close(fd);
             } else {
