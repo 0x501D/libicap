@@ -1110,11 +1110,12 @@ static int ic_poll_icap(ic_query_int_t *q)
     while (!done) {
         FD_ZERO(&rset);
         FD_ZERO(&wset);
-        FD_SET(q->sd, &rset);
 
         if (!send_done) {
-            wset = rset;
-        };
+            FD_SET(q->sd, &wset);
+        } else {
+            FD_SET(q->sd, &rset);
+        }
 
         /* TODO use exceptfds too */
         rc = select(q->sd + 1, &rset, &wset, NULL, &tv);
