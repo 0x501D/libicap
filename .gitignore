@@ -1,7 +1,7 @@
 libicap.so
-ic_demo_cl
-ic_demo_raw
-ic_demo_chunked
+ic_test_cl
+ic_test_raw
+ic_test_chunked
 *.o
 *.d
 tags

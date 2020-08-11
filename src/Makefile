@@ -12,13 +12,16 @@ libicap.so: $(OBJ)
 %.d: %.c
 	@$(CC) $< -MM -MT $(@:.d=.o) >$@
 
-demo:
-	$(MAKE) -C demo all
+test_single:
+	$(MAKE) -C test all TESTFLAGS=-DIC_TEST_SINGLE
 
-clean_demo:
-	$(MAKE) -C demo clean
+test_multi:
+	$(MAKE) -C test all TESTFLAGS=-DIC_TEST_MULTI
+
+test_clean:
+	$(MAKE) -C test clean
 
 clean:
 	rm -f libicap.so *.o *.d
 
-.PHONY: demo clean clean_demo
+.PHONY: test_single test_multi clean test_clean

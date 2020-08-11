@@ -1,19 +1,20 @@
 CC = gcc
 CFLAGS = -O0 -ggdb -I../../ -Wall -Wextra -Wformat-security -pedantic
+CFLAGS += $(TESTFLAGS)
 LDFLAGS = -L../ -licap
 
-ic_demo_cl: ic_demo_cl.o
+ic_test_cl: ic_test_cl.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
-ic_demo_chunked: ic_demo_chunked.o
+ic_test_chunked: ic_test_chunked.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
-ic_demo_raw: ic_demo_raw.o
+ic_test_raw: ic_test_raw.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
-all: ic_demo_cl ic_demo_chunked ic_demo_raw
+all: ic_test_cl ic_test_chunked ic_test_raw
 
 clean:
-	rm -f *.o ic_demo_cl ic_demo_chunked ic_demo_raw
+	rm -f *.o ic_test_cl ic_test_chunked ic_test_raw
 
 .PHONY: clean

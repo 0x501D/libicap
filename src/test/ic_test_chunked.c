@@ -119,9 +119,12 @@ int main(int argc, char **argv)
         int hdr_len;
         size_t body_len;
         size_t payload_len = 0;
-        ssize_t chunk_len_sz, chunk_zero_sz;
+        ssize_t chunk_len_sz;
         char *chunk_len;
+#ifdef IC_TEST_SINGLE
         char *chunk_zero;
+        ssize_t chunk_zero_sz;
+#endif
         unsigned char *payload, *p;
 
         ic_reuse_connection(&q, 0);
@@ -163,13 +166,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "Cannot read '%s': %s\n", path, strerror(errno));
             goto out;
         }
-#if 1
+
         if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
                         "Transfer-Encoding: chunked\r\n\r\n")) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
-#endif
 
         if ((err = ic_set_res_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
             printf("%s\n", ic_strerror(err));
@@ -188,14 +190,14 @@ int main(int argc, char **argv)
         }
 
         payload_len += chunk_len_sz;
-
+#ifdef IC_TEST_SINGLE
         if ((chunk_zero_sz = asprintf(&chunk_zero, "\r\n0\r\n\r\n")) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
 
         payload_len += chunk_zero_sz;
-
+#endif
         if ((payload = calloc(1, payload_len)) == NULL) {
             fprintf(stderr, "Out of memory\n");
             goto out;
@@ -205,8 +207,10 @@ int main(int argc, char **argv)
         memcpy(p, chunk_len, chunk_len_sz);
         p += chunk_len_sz;
         memcpy(p, body, body_len);
+#ifdef IC_TEST_SINGLE
         p += body_len;
         memcpy(p, chunk_zero, chunk_zero_sz);
+#endif
 
         /*int pl_fd = open("/tmp/pl_test", O_CREAT | O_WRONLY, 0644);
         write(pl_fd, payload, payload_len);
@@ -219,15 +223,16 @@ int main(int argc, char **argv)
 
         rc = ic_send_respmod(&q);
         if (rc == 1) {
-#if 0
-        /*    const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+
+#ifdef IC_TEST_MULTI
+            const char *body_2 = "\r\ne\r\nabcdefg1234567\r\n0\r\n\r\n";
             ic_reuse_connection(&q, 1);
 
-            if ((err = ic_set_body(&q, body_2, 34)) == -1) {
+            if ((err = ic_set_body(&q, (u_char *) body_2, strlen(body_2))) == -1) {
                 printf("%s\n", ic_strerror(err));
                 goto out;
-            }*/
-            ic_reuse_connection(&q, 1);
+            }
+            /*ic_reuse_connection(&q, 1);
 
             struct stat info2;
             unsigned char *body2 = NULL;
@@ -256,7 +261,7 @@ int main(int argc, char **argv)
             if ((err = ic_set_body(&q, body2, body_len2)) == -1) {
                 printf("%s\n", ic_strerror(err));
                 goto out;
-            }
+            }*/
 
             if (ic_send_respmod(&q) == 0) {
 
@@ -264,23 +269,23 @@ int main(int argc, char **argv)
                 const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
                 if (ctx) {
-                    unlink("/tmp/content");
-                    int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
+                    unlink("/tmp/content_chunked");
+                    int fd = open("/tmp/content_chunked", O_CREAT|O_WRONLY, 0660);
                     write(fd, ctx, ctx_len);
                     close(fd);
                 } else {
                     printf("%s\n", ic_strerror(err));
                 }
             }
-            free(body2);
+            //free(body2);
 #endif
         } else if (rc == 0) {
             size_t ctx_len;
             const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
             if (ctx) {
-                unlink("/tmp/content");
-                int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
+                unlink("/tmp/content_chunked");
+                int fd = open("/tmp/content_chunked", O_CREAT|O_WRONLY, 0660);
                 write(fd, ctx, ctx_len);
                 close(fd);
             } else {
