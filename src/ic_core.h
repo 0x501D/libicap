@@ -20,5 +20,6 @@
 #define IC_SRV_ALLOC_LEN    IC_SRV_READ_LEN * 5
 
 #define IC_FREE(p) { free(p); p = NULL; }
+#define IC_STRLEN(s) (sizeof(s) - 1)
 
 #endif

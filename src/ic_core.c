@@ -53,6 +53,7 @@ typedef struct ic_cl_ctx {
     const unsigned char *body;
     char *icap_hdr;
     char *payload;
+    unsigned int body_end:1;
 } ic_cl_ctx_t;
 
 typedef struct ic_srv_ctx {
@@ -196,6 +197,7 @@ IC_EXPORT int ic_reuse_connection(ic_query_t *q, int proceed)
         icap->cl.body_sended = 0;
         icap->cl.preview_sended_len = 0;
         icap->cl.icap_hdr_len = 0;
+        icap->cl.body_end = 0;
         icap->srv.got_hdr = 0;
         icap->srv.null_body = 0;
         icap->srv.decoded = 0;
@@ -715,8 +717,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
             return -IC_ERR_ENOMEM;
         }
 
-        ic_debug(icap->debug_path, "plen: %zu, msg: %zu\n",
-                icap->cl.payload_len, icap->cl.preview_msg_len);
+        ic_debug(icap->debug_path, "payload len: %zu\n", icap->cl.payload_len);
 
         ic_debug(icap->debug_path, "*** start making payload ***\n");
         p = icap->cl.payload;
@@ -825,7 +826,57 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         ic_str_free(&rest_hex);
         ic_str_free(&hex);
     } else if (icap->cl.type == IC_CTX_TYPE_CHUNKED) {
-        //...
+        size_t zero_len = IC_STRLEN(IC_CHUNK_IEOF);
+
+        IC_FREE(icap->cl.payload);
+
+        if ((icap->cl.payload = malloc(icap->cl.payload_len)) == NULL) {
+            return -IC_ERR_ENOMEM;
+        }
+
+        ic_debug(icap->debug_path, "payload len: %zu\n", icap->cl.payload_len);
+
+        ic_debug(icap->debug_path, "*** start making payload ***\n");
+        p = icap->cl.payload;
+        if (!icap->icap_hdr_sended) {
+            ic_debug(icap->debug_path, "add icap header\n");
+            memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
+            p += icap->cl.icap_hdr_len;
+        }
+
+        if (!icap->http_hdr_sended) {
+            ic_debug(icap->debug_path, "add http headers\n");
+            if (icap->cl.req_hdr_len) {
+                memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
+                p += icap->cl.req_hdr_len;
+            }
+
+            if (icap->cl.res_hdr_len) {
+                memcpy(p, icap->cl.res_hdr, icap->cl.res_hdr_len);
+                p += icap->cl.res_hdr_len;
+            }
+        }
+
+        if (icap->cl.body_len) {
+            ic_debug(icap->debug_path, "add body\n");
+            memcpy(p, icap->cl.body, icap->cl.body_len);
+        }
+
+        /* check for zero chunk
+         * XXX this is bad, because we are not shure that is real zero chunk,
+         * maybe some payload in the middle of body, must fix it in future */
+        if (icap->cl.body_len >= zero_len) {
+            if (!memcmp((p + icap->cl.body_len) - zero_len, IC_CHUNK_IEOF, zero_len)) {
+                icap->cl.body_end = 1;
+                ic_debug(icap->debug_path, "zero chunk found\n");
+            }
+        }
+
+        /*int fd = open("/tmp/dump_chunked", O_CREAT | O_WRONLY, 0666);
+        write(fd, icap->cl.payload, icap->cl.payload_len);
+        close(fd);*/
+    } else if (icap->cl.type == IC_CTX_TYPE_CLOSE) {
+        //TODO
     }
 
     rc = ic_poll_icap(icap);
@@ -1260,7 +1311,6 @@ static int ic_send_to_service(ic_query_int_t *q)
         }
     } while (sended > 0);
 
-    /* All payload was sended but not all content available now */
     if (q->cl.type == IC_CTX_TYPE_CL) {
         if (!q->preview_mode) {
             if ((uint64_t) all_sended > q->cl.non_body_ctx) {
@@ -1317,13 +1367,27 @@ static int ic_send_to_service(ic_query_int_t *q)
             ic_debug(q->debug_path, "Send more data after 100 continue\n");
             return 1;
         }
+
+        /* Not all payload was sended, wait for select(2) writefds available */
+        if (!q->preview_mode && q->cl.total_sended != q->cl.payload_len) {
+            return 2;
+        }
+    } else if (q->cl.type == IC_CTX_TYPE_CHUNKED) {
+        if (!q->cl.body_end) {
+            if (q->cl.total_sended != q->cl.payload_len) {
+                /* need to write more payload */
+                return 2;
+            } else {
+                /* not all payload sended, send more data */
+                return 1;
+            }
+        } else if (q->cl.body_end && q->cl.total_sended != q->cl.payload_len) {
+            /* need to write more payload */
+            return 2;
+        }
     }
 
-    /* Not all payload was sended, wait for select(2) writefds available */
-    if (!q->preview_mode && q->cl.total_sended != q->cl.payload_len) {
-        return 2;
-    }
-
+    /* all stream was sended, read answer from ICAP service */
     return 0;
 }
 
