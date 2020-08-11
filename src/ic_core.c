@@ -1186,7 +1186,7 @@ static int ic_create_header(ic_query_int_t *q)
 
 
             /* Enable preview mode only if content-length is known */
-            if (q->cl.type ==IC_CTX_TYPE_CL && q->cl.opts.allow_204 && q->srv.opts.allow_204) {
+            if (q->cl.type == IC_CTX_TYPE_CL && q->cl.opts.allow_204 && q->srv.opts.allow_204) {
                 rc += ic_str_format_cat(&preview, "Allow: 204\r\n");
                 if (q->cl.body_len) {
                     if (q->cl.opts.preview_len > q->srv.opts.preview_len) {
