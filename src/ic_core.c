@@ -421,6 +421,7 @@ IC_EXPORT int ic_set_stream_ended(ic_query_t *q)
     }
 
     icap->cl.body_end = 1;
+    icap->cl.body_len = 0;
 
     return 0;
 }
@@ -583,6 +584,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     ic_query_int_t *icap = ic_int_query(q);
     char *p = NULL;
     int add_eof_chunk = 0;
+    size_t zero_len = IC_STRLEN(IC_CHUNK_IEOF);
 
     ic_debug(icap->debug_path, "<<<%s called >>>\n", __func__);
 
@@ -621,9 +623,8 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     size_t total_http_hdr_len = icap->cl.req_hdr_len + icap->cl.res_hdr_len;
 
     if (icap->cl.type == IC_CTX_TYPE_CL) {
-        /* For objects arriving using "Content-Length" headers, one big chunk
-           can be created of the same size as indicated in the Content-Length
-           header. */
+        /* RFC-3507: For objects arriving using "Content-Length" headers, one big chunk
+           can be created of the same size as indicated in the Content-Length header. */
         ic_str_t hex, rest_hex;
         int add_preview_ieof = 0;
         int add_zero_chunk = 0;
@@ -843,10 +844,8 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         ic_str_free(&rest_hex);
         ic_str_free(&hex);
     } else if (icap->cl.type == IC_CTX_TYPE_CHUNKED) {
-        /* For objects arriving using chunked encoding, they can be
+        /* RFC-3507: For objects arriving using chunked encoding, they can be
            retransmitted as is (without re-chunking). */
-        size_t zero_len = IC_STRLEN(IC_CHUNK_IEOF);
-
         IC_FREE(icap->cl.payload);
 
         if ((icap->cl.payload = malloc(icap->cl.payload_len)) == NULL) {
@@ -895,15 +894,68 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         write(fd, icap->cl.payload, icap->cl.payload_len);
         close(fd);*/
     } else if (icap->cl.type == IC_CTX_TYPE_CLOSE) {
-        /* For objects arriving using a TCP close to signal the end of the
-           object, each incoming group of bytes read from the OS can be
-           converted into a chunk (by writing the length of the bytes read,
-           followed by the bytes themselves) */
+        /* RFC-3507: For objects arriving using a TCP close to signal the end of the
+           object, each incoming group of bytes read from the OS can be converted
+           into a chunk (by writing the length of the bytes read, followed by the
+           bytes themselves) */
+        ic_str_t hex;
+
+        memset(&hex, 0, sizeof(hex));
+
         if (icap->cl.body_end) {
             /* got tcp close from http server, just send zero chunk */
+            if ((rc = ic_str_format_cat(&hex, IC_CHUNK_IEOF)) != 0) {
+                return rc;
+            }
         } else {
             /* create chunk */
+            if ((rc = ic_str_format_cat(&hex, "%lx\r\n", icap->cl.body_len)) != 0) {
+                return rc;
+            }
         }
+        icap->cl.payload_len += hex.len;
+
+        IC_FREE(icap->cl.payload);
+
+        if ((icap->cl.payload = malloc(icap->cl.payload_len)) == NULL) {
+            return -IC_ERR_ENOMEM;
+        }
+
+        ic_debug(icap->debug_path, "payload len: %zu\n", icap->cl.payload_len);
+
+        ic_debug(icap->debug_path, "*** start making payload ***\n");
+        p = icap->cl.payload;
+        if (!icap->icap_hdr_sended) {
+            ic_debug(icap->debug_path, "add icap header\n");
+            memcpy(p, icap->cl.icap_hdr, icap->cl.icap_hdr_len);
+            p += icap->cl.icap_hdr_len;
+        }
+
+        if (!icap->http_hdr_sended) {
+            ic_debug(icap->debug_path, "add http headers\n");
+            if (icap->cl.req_hdr_len) {
+                memcpy(p, icap->cl.req_hdr, icap->cl.req_hdr_len);
+                p += icap->cl.req_hdr_len;
+            }
+
+            if (icap->cl.res_hdr_len) {
+                memcpy(p, icap->cl.res_hdr, icap->cl.res_hdr_len);
+                p += icap->cl.res_hdr_len;
+            }
+        }
+
+        if (icap->cl.body_len && !icap->cl.body_end) {
+            ic_debug(icap->debug_path, "add hex\n");
+            memcpy(p, hex.data, hex.len);
+            p += hex.len;
+            ic_debug(icap->debug_path, "add body\n");
+            memcpy(p, icap->cl.body, icap->cl.body_len);
+        } else if (!icap->cl.body_len && icap->cl.body_end) {
+            ic_debug(icap->debug_path, "add zero chunk\n");
+            memcpy(p, hex.data, hex.len);
+        }
+
+        ic_str_free(&hex);
     }
 
     rc = ic_poll_icap(icap);
@@ -1399,7 +1451,7 @@ static int ic_send_to_service(ic_query_int_t *q)
         if (!q->preview_mode && q->cl.total_sended != q->cl.payload_len) {
             return 2;
         }
-    } else if (q->cl.type == IC_CTX_TYPE_CHUNKED) {
+    } else if (q->cl.type == IC_CTX_TYPE_CHUNKED || q->cl.type == IC_CTX_TYPE_CLOSE) {
         if (!q->cl.body_end) {
             if (q->cl.total_sended != q->cl.payload_len) {
                 /* need to write more payload */
@@ -1513,7 +1565,7 @@ IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len, int *err)
     }
 
     /* decode chunked transfer encoding */
-    if (icap->cl.type == IC_CTX_TYPE_CL) {
+    if (icap->cl.type == IC_CTX_TYPE_CL || icap->cl.type == IC_CTX_TYPE_CLOSE) {
         int rc = ic_decode_chunked(icap);
         if (rc != 0) {
             *err = rc;

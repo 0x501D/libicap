@@ -93,7 +93,7 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    ic_enable_debug(&q, "/tmp/icap_debug");
+    ic_enable_debug(&q, "/tmp/icap_debug_raw");
 
     if (!port) {
         port = 1344;
@@ -120,7 +120,7 @@ int main(int argc, char **argv)
         size_t body_len;
 
         ic_reuse_connection(&q, 0);
-        ic_enable_debug(&q, "/tmp/icap_debug");
+        ic_enable_debug(&q, "/tmp/icap_debug_raw");
         if (allow_204) {
             ic_allow_204(&q);
             ic_set_preview_len(&q, preview_len);
@@ -158,37 +158,26 @@ int main(int argc, char **argv)
             fprintf(stderr, "Cannot read '%s': %s\n", path, strerror(errno));
             goto out;
         }
-#if 1
-        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: %zu\r\n\r\n", body_len)) == -1) {
+        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n\r\n")) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
         }
-#endif
-#if 0
-        /*if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: 68\r\n\r\n")) == -1) {
-            fprintf(stderr, "Out of memory\n");
-            goto out;
-        }*/
-        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: 102422\r\n\r\n")) == -1) {
-            fprintf(stderr, "Out of memory\n");
-            goto out;
-        }
-#endif
 
         if ((err = ic_set_res_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
             printf("%s\n", ic_strerror(err));
             goto out;
         }
-        //printf("body_len:%zu\n", body_len);
+
         if ((err = ic_set_body(&q, body, body_len)) == -1) {
             printf("%s\n", ic_strerror(err));
             goto out;
         }
-
         rc = ic_send_respmod(&q);
+#ifdef IC_TEST_SINGLE
+        ic_reuse_connection(&q, 1);
+        ic_set_stream_ended(&q);
+        rc = ic_send_respmod(&q);
+#endif
         if (rc == 1) {
 #if 0
         /*    const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
@@ -250,8 +239,8 @@ int main(int argc, char **argv)
             const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
             if (ctx) {
-                unlink("/tmp/content");
-                int fd = open("/tmp/content", O_CREAT|O_WRONLY, 0660);
+                unlink("/tmp/content_raw");
+                int fd = open("/tmp/content_raw", O_CREAT|O_WRONLY, 0660);
                 write(fd, ctx, ctx_len);
                 close(fd);
             } else {
