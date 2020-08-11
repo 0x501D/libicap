@@ -168,6 +168,11 @@ int main(int argc, char **argv)
             goto out;
         }
 
+        if (resp_type != IC_CTX_TYPE_CLOSE) {
+            fprintf(stderr, "Wrong HTTP traffic type\n");
+            exit(1);
+        }
+
         if ((err = ic_set_body(&q, body, body_len)) == -1) {
             printf("%s\n", ic_strerror(err));
             goto out;
