@@ -411,6 +411,20 @@ IC_EXPORT int ic_set_service(ic_query_t *q, const char *service)
 
     return 0;
 }
+
+IC_EXPORT int ic_set_stream_ended(ic_query_t *q)
+{
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    icap->cl.body_end = 1;
+
+    return 0;
+}
+
 IC_EXPORT int ic_enable_debug(ic_query_t *q, const char *path)
 {
     ic_query_int_t *icap = ic_int_query(q);
@@ -607,6 +621,9 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
     size_t total_http_hdr_len = icap->cl.req_hdr_len + icap->cl.res_hdr_len;
 
     if (icap->cl.type == IC_CTX_TYPE_CL) {
+        /* For objects arriving using "Content-Length" headers, one big chunk
+           can be created of the same size as indicated in the Content-Length
+           header. */
         ic_str_t hex, rest_hex;
         int add_preview_ieof = 0;
         int add_zero_chunk = 0;
@@ -826,6 +843,8 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         ic_str_free(&rest_hex);
         ic_str_free(&hex);
     } else if (icap->cl.type == IC_CTX_TYPE_CHUNKED) {
+        /* For objects arriving using chunked encoding, they can be
+           retransmitted as is (without re-chunking). */
         size_t zero_len = IC_STRLEN(IC_CHUNK_IEOF);
 
         IC_FREE(icap->cl.payload);
@@ -876,7 +895,15 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         write(fd, icap->cl.payload, icap->cl.payload_len);
         close(fd);*/
     } else if (icap->cl.type == IC_CTX_TYPE_CLOSE) {
-        //TODO
+        /* For objects arriving using a TCP close to signal the end of the
+           object, each incoming group of bytes read from the OS can be
+           converted into a chunk (by writing the length of the bytes read,
+           followed by the bytes themselves) */
+        if (icap->cl.body_end) {
+            /* got tcp close from http server, just send zero chunk */
+        } else {
+            /* create chunk */
+        }
     }
 
     rc = ic_poll_icap(icap);
