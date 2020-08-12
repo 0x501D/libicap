@@ -105,9 +105,11 @@ static int ic_poll_icap(ic_query_int_t *q);
 static int ic_send_to_service(ic_query_int_t *q);
 static int ic_read_from_service(ic_query_int_t *q);
 static int ic_parse_response(ic_query_int_t *q);
-static int ic_get_resp_ctx_type(ic_query_int_t *q);
 static int ic_decode_chunked(ic_query_int_t *q);
+static int ic_send(ic_query_t *q, ic_method_t method);
 static uint64_t ic_get_body_offset(ic_query_int_t *q);
+static int ic_get_ctx_type(ic_query_int_t *q,
+        const unsigned char *hdr, size_t len);
 
 IC_EXPORT const char *ic_err_msg[] = {
     "Unknown error",
@@ -445,72 +447,6 @@ IC_EXPORT int ic_enable_debug(ic_query_t *q, const char *path)
     return 0;
 }
 
-IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
-        size_t len)
-{
-    ic_query_int_t *icap = ic_int_query(q);
-
-    if (!icap) {
-        return -IC_ERR_QUERY_NULL;
-    }
-
-    if (!hdr) {
-        return -IC_ERR_NULL_POINTER;
-    }
-
-    IC_FREE(icap->cl.req_hdr);
-
-    icap->cl.req_hdr = malloc(len);
-    if (!icap->cl.req_hdr) {
-        return -IC_ERR_ENOMEM;
-    }
-
-    memcpy(icap->cl.req_hdr, hdr, len);
-    icap->cl.req_hdr_len = len;
-
-    return 0;
-}
-
-static int ic_get_resp_ctx_type(ic_query_int_t *q)
-{
-    const char *cl = "\nContent-Length: ";
-    const char *te = "\nTransfer-Encoding: chunked";
-    int rc = 0;
-
-    ic_substr_t sub = {
-        .str = q->cl.res_hdr,
-        .sub = cl,
-        .str_len = q->cl.res_hdr_len,
-        .sub_len = strlen(cl),
-        .begin = 0x20, /* space */
-        .end   = 0xd   /* \r    */
-    };
-
-    if (memmem(q->cl.res_hdr, q->cl.res_hdr_len, te, strlen(te))) {
-        q->cl.type = IC_CTX_TYPE_CHUNKED;
-        return 0;
-    }
-
-    rc = ic_extract_substr(&sub);
-    if (rc == 0) {
-        if ((rc = ic_strtoul(sub.result, &q->cl.content_len, 10)) != 0) {
-            free(sub.result);
-            return rc;
-        }
-
-        free(sub.result);
-        q->cl.type = IC_CTX_TYPE_CL;
-
-        return 0;
-    } else if (rc < 0) {
-        return rc;
-    }
-
-    q->cl.type = IC_CTX_TYPE_CLOSE;
-
-    return 0;
-}
-
 IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
         size_t len, ic_ctx_type_t *type)
 {
@@ -535,11 +471,85 @@ IC_EXPORT int ic_set_res_hdr(ic_query_t *q, const unsigned char *hdr,
     memcpy(icap->cl.res_hdr, hdr, len);
     icap->cl.res_hdr_len = len;
 
-    if ((rc = ic_get_resp_ctx_type(icap)) < 0) {
+    if ((rc = ic_get_ctx_type(icap, icap->cl.res_hdr, len)) < 0) {
         return rc;
     }
 
     *type = icap->cl.type;
+
+    return 0;
+}
+
+IC_EXPORT int ic_set_req_hdr(ic_query_t *q, const unsigned char *hdr,
+        size_t len, ic_ctx_type_t *type)
+{
+    int rc;
+    ic_query_int_t *icap = ic_int_query(q);
+
+    if (!icap) {
+        return -IC_ERR_QUERY_NULL;
+    }
+
+    if (!hdr) {
+        return -IC_ERR_NULL_POINTER;
+    }
+
+    IC_FREE(icap->cl.req_hdr);
+
+    icap->cl.req_hdr = malloc(len);
+    if (!icap->cl.req_hdr) {
+        return -IC_ERR_ENOMEM;
+    }
+
+    memcpy(icap->cl.req_hdr, hdr, len);
+    icap->cl.req_hdr_len = len;
+
+    if ((rc = ic_get_ctx_type(icap, icap->cl.req_hdr, len)) < 0) {
+        return rc;
+    }
+
+    *type = icap->cl.type;
+
+    return 0;
+}
+
+static int ic_get_ctx_type(ic_query_int_t *q, const unsigned char *hdr,
+        size_t len)
+{
+    const char *cl = "\nContent-Length: ";
+    const char *te = "\nTransfer-Encoding: chunked";
+    int rc = 0;
+
+    ic_substr_t sub = {
+        .str = hdr,
+        .sub = cl,
+        .str_len = len,
+        .sub_len = strlen(cl),
+        .begin = 0x20, /* space */
+        .end   = 0xd   /* \r    */
+    };
+
+    if (memmem(hdr, len, te, strlen(te))) {
+        q->cl.type = IC_CTX_TYPE_CHUNKED;
+        return 0;
+    }
+
+    rc = ic_extract_substr(&sub);
+    if (rc == 0) {
+        if ((rc = ic_strtoul(sub.result, &q->cl.content_len, 10)) != 0) {
+            free(sub.result);
+            return rc;
+        }
+
+        free(sub.result);
+        q->cl.type = IC_CTX_TYPE_CL;
+
+        return 0;
+    } else if (rc < 0) {
+        return rc;
+    }
+
+    q->cl.type = IC_CTX_TYPE_CLOSE;
 
     return 0;
 }
@@ -580,6 +590,16 @@ IC_EXPORT int ic_set_body(ic_query_t *q, const unsigned char *body,
 
 IC_EXPORT int ic_send_respmod(ic_query_t *q)
 {
+    return ic_send(q, IC_METHOD_ID_RESP);
+}
+
+IC_EXPORT int ic_send_reqmod(ic_query_t *q)
+{
+    return ic_send(q, IC_METHOD_ID_REQ);
+}
+
+static int ic_send(ic_query_t *q, ic_method_t method)
+{
     int err, rc;
     ic_query_int_t *icap = ic_int_query(q);
     char *p = NULL;
@@ -594,7 +614,7 @@ IC_EXPORT int ic_send_respmod(ic_query_t *q)
         return -IC_ERR_QUERY_NULL;
     }
 
-    icap->method = IC_METHOD_ID_RESP;
+    icap->method = method;
     icap->cl.non_body_ctx = 0;
     icap->cl.non_body_ctx_after_preview = 0;
 
@@ -1116,6 +1136,31 @@ static int ic_create_uri(ic_query_int_t *q)
     return 0;
 }
 
+static int ic_enable_preview_mode(ic_query_int_t *q, ic_str_t *preview) {
+    int rc = 0;
+
+    /* Enable preview mode only if content-length is known */
+    if (q->cl.type == IC_CTX_TYPE_CL && q->cl.opts.allow_204 && q->srv.opts.allow_204) {
+        rc += ic_str_format_cat(preview, "Allow: 204\r\n");
+        if (q->cl.body_len) {
+            if (q->cl.opts.preview_len > q->srv.opts.preview_len) {
+                q->cl.opts.preview_len = q->srv.opts.preview_len;
+            }
+            rc += ic_str_format_cat(preview, "Preview: %u\r\n", q->cl.opts.preview_len);
+        } else {
+            /* This indicates that the ICAP client will send only the encapsulated
+               header sections to the ICAP server, then it will send a zero-length
+               chunk and stop and wait for a "go ahead" to send more encapsulated
+               body bytes to the ICAP server. */
+            q->preview_only_hdr = 1;
+            rc += ic_str_format_cat(preview, "Preview: 0\r\n");
+        }
+        q->preview_mode = 1;
+    }
+
+    return rc;
+}
+
 /* RFC-3507 The "Encapsulated" Header:
  * REQMOD request encapsulated_list: [reqhdr] reqbody
  * REQMOD response encapsulated_list: {[reqhdr] reqbody} |
@@ -1140,7 +1185,9 @@ static int ic_create_header(ic_query_int_t *q)
         {
             ic_str_t enca;
             int rc = 0;
+            ic_str_t preview;
 
+            memset(&preview, 0, sizeof(preview));
             memset(&enca, 0, sizeof(enca));
 
             if (q->cl.req_hdr_len) { /* req hdr exists */
@@ -1180,29 +1227,7 @@ static int ic_create_header(ic_query_int_t *q)
                 return -IC_ERR_ENOMEM;
             }
 
-            /* Generate ICAP Preview params */
-            ic_str_t preview;
-            memset(&preview, 0, sizeof(preview));
-
-
-            /* Enable preview mode only if content-length is known */
-            if (q->cl.type == IC_CTX_TYPE_CL && q->cl.opts.allow_204 && q->srv.opts.allow_204) {
-                rc += ic_str_format_cat(&preview, "Allow: 204\r\n");
-                if (q->cl.body_len) {
-                    if (q->cl.opts.preview_len > q->srv.opts.preview_len) {
-                        q->cl.opts.preview_len = q->srv.opts.preview_len;
-                    }
-                    rc += ic_str_format_cat(&preview, "Preview: %u\r\n", q->cl.opts.preview_len);
-                } else {
-                    /* This indicates that the ICAP client will send only the encapsulated
-                    header sections to the ICAP server, then it will send a zero-length
-                    chunk and stop and wait for a "go ahead" to send more encapsulated
-                    body bytes to the ICAP server. */
-                    q->preview_only_hdr = 1;
-                    rc += ic_str_format_cat(&preview, "Preview: 0\r\n");
-                }
-                q->preview_mode = 1;
-            }
+            rc = ic_enable_preview_mode(q, &preview);
 
             if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s%s",
                         IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
@@ -1217,6 +1242,45 @@ static int ic_create_header(ic_query_int_t *q)
         break;
 
     case IC_METHOD_ID_REQ:
+        {
+            ic_str_t enca;
+            int rc = 0;
+            ic_str_t preview;
+
+            memset(&preview, 0, sizeof(preview));
+            memset(&enca, 0, sizeof(enca));
+
+            if (q->cl.req_hdr_len) { /* req hdr exists*/
+                rc += ic_str_format_cat(&enca, "Encapsulated: req-hdr=0");
+                if (q->cl.body_len) { /* body exists */
+                    rc += ic_str_format_cat(&enca, ", req-body=%zu", q->cl.req_hdr_len);
+                } else { /*no body */
+                    rc += ic_str_format_cat(&enca, ", null-body=%zu", q->cl.req_hdr_len);
+                }
+            } else { /* no req hrd */
+                if (q->cl.body_len) { /* body exists */
+                    rc += ic_str_format_cat(&enca, "Encapsulated: res-body=0");
+                } else { /*no body */
+                    rc += ic_str_format_cat(&enca, "Encapsulated: null-body=0");
+                }
+            }
+
+            if (rc != 0) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            rc = ic_enable_preview_mode(q, &preview);
+
+            if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s%s",
+                        IC_METHOD_REQMOD, q->uri, IC_ICAP_ID,
+                        preview.len ? preview.data : "",
+                        enca.data, IC_RN_TWICE)) == -1) {
+                return -IC_ERR_ENOMEM;
+            }
+
+            ic_str_free(&enca);
+            ic_str_free(&preview);
+        }
         break;
     }
 
@@ -1589,9 +1653,9 @@ IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len, int *err)
 static uint64_t ic_get_body_offset(ic_query_int_t *q)
 {
     uint64_t offset = 0;
+    int rc;
 
-    if (q->method == IC_METHOD_ID_RESP) { /* only resbody in RESPMOD response */
-        int rc;
+    if (q->method == IC_METHOD_ID_RESP) {
 
         /* response contains only body */
         if (strstr(q->srv.icap_hdr, IC_RES_BODY_ONLY)) {
@@ -1602,7 +1666,7 @@ static uint64_t ic_get_body_offset(ic_query_int_t *q)
             .str = q->srv.payload,
             .sub = IC_RES_BODY_SUB,
             .str_len = q->srv.icap_hdr_len,
-            .sub_len = sizeof(IC_RES_BODY_SUB) - 1,
+            .sub_len = IC_STRLEN(IC_RES_BODY_SUB),
             .begin = '=',
             .end = '\r'
         };
@@ -1616,9 +1680,51 @@ static uint64_t ic_get_body_offset(ic_query_int_t *q)
 
             free(sub.result);
         } else if (rc < 0) {
+            free(sub.result);
+            return rc;
+        }
+    } else if (q->method == IC_METHOD_ID_REQ) {
+        /* response contains only body */
+        if (strstr(q->srv.icap_hdr, IC_RES_BODY_ONLY) ||
+                strstr(q->srv.icap_hdr, IC_REQ_BODY_ONLY)) {
+            return 0;
+        }
+
+        ic_substr_t sub = {
+            .str = q->srv.payload,
+            .sub = IC_RES_BODY_SUB,
+            .str_len = q->srv.icap_hdr_len,
+            .sub_len = IC_STRLEN(IC_RES_BODY_SUB),
+            .begin = '=',
+            .end = '\r'
+        };
+
+        rc = ic_extract_substr(&sub); /* likely */
+        if (rc == 0) {
+            if ((rc = ic_strtoul(sub.result, &offset, 10)) != 0) {
+                free(sub.result);
+                return rc;
+            } else { /* got offset */
+                free(sub.result);
+                goto out;
+            }
+        } else if (rc < 0) {
+            return rc;
+        }
+
+        sub.sub = IC_REQ_BODY_SUB;
+        rc = ic_extract_substr(&sub);
+        if (rc == 0) {
+            if ((rc = ic_strtoul(sub.result, &offset, 10)) != 0) {
+                free(sub.result);
+                return rc;
+            }
+            free(sub.result);
+        } else if (rc < 0) {
             return rc;
         }
     }
+out:
     return offset;
 }
 
@@ -1671,6 +1777,7 @@ static int ic_decode_chunked(ic_query_int_t *q)
 
             memcpy(chunk_len_buf, begin, hex_len);
             if ((rc = ic_strtoul(chunk_len_buf, &chunk_len, 16)) != 0) {
+                printf("'%s'\n", chunk_len_buf);
                 free(chunk_len_buf);
                 return rc;
             }

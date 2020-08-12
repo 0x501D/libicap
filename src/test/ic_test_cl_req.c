@@ -93,7 +93,7 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    ic_enable_debug(&q, "/tmp/icap_debug_cl");
+    ic_enable_debug(&q, "/tmp/icap_debug_cl_req");
 
     if (!port) {
         port = 1344;
@@ -120,7 +120,7 @@ int main(int argc, char **argv)
         size_t body_len;
 
         ic_reuse_connection(&q, 0);
-        ic_enable_debug(&q, "/tmp/icap_debug_cl");
+        ic_enable_debug(&q, "/tmp/icap_debug_cl_req");
         if (allow_204) {
             ic_allow_204(&q);
             if (preview_len) {
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
             goto out;
         }
 #ifdef IC_TEST_SINGLE
-        if ((hdr_len = asprintf((char **) &resp_hdr, "HTTP/1.1 200 OK\r\n"
+        if ((hdr_len = asprintf((char **) &resp_hdr, "POST / HTTP/1.1\r\n"
                         "Content-Length: %zu\r\n\r\n", body_len)) == -1) {
             fprintf(stderr, "Out of memory\n");
             goto out;
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
         }
 #endif
 
-        if ((err = ic_set_res_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
+        if ((err = ic_set_req_hdr(&q, resp_hdr, hdr_len, &resp_type)) != 0) {
             printf("%s\n", ic_strerror(err));
             goto out;
         }
@@ -195,7 +195,7 @@ int main(int argc, char **argv)
             goto out;
         }
 
-        rc = ic_send_respmod(&q);
+        rc = ic_send_reqmod(&q);
         if (rc == 1) {
 #ifdef IC_TEST_MULTI
         /*    const unsigned char *body_2 = "STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
@@ -242,8 +242,8 @@ int main(int argc, char **argv)
                 const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
                 if (ctx) {
-                    unlink("/tmp/content_cl");
-                    int fd = open("/tmp/content_cl", O_CREAT|O_WRONLY, 0660);
+                    unlink("/tmp/content_cl_req");
+                    int fd = open("/tmp/content_cl_req", O_CREAT|O_WRONLY, 0660);
                     write(fd, ctx, ctx_len);
                     close(fd);
                 } else {
@@ -257,8 +257,8 @@ int main(int argc, char **argv)
             const char *ctx = ic_get_content(&q, &ctx_len, &err);
 
             if (ctx) {
-                unlink("/tmp/content_cl");
-                int fd = open("/tmp/content_cl", O_CREAT|O_WRONLY, 0660);
+                unlink("/tmp/content_cl_req");
+                int fd = open("/tmp/content_cl_req", O_CREAT|O_WRONLY, 0660);
                 write(fd, ctx, ctx_len);
                 close(fd);
             } else {

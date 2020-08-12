@@ -2,6 +2,7 @@ libicap.so
 ic_test_cl
 ic_test_raw
 ic_test_chunked
+ic_test_cl_req
 *.o
 *.d
 tags
