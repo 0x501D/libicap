@@ -1,4 +1,4 @@
-# This is alfa version of ICAP protocol library for client side.
+# ICAP protocol library for client side.
 
 ## Features
 * Support: OPTIONS, REQMOD, RESPMOD
