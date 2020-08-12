@@ -10,4 +10,3 @@
 * test with more ICAP servers.
 
 Was tested with c-icap + squidclamav.
-Do not use in production, this is initial release! 
