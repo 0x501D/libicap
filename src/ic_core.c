@@ -1223,11 +1223,11 @@ static int ic_create_header(ic_query_int_t *q)
                 }
             }
 
+            rc += ic_enable_preview_mode(q, &preview);
+
             if (rc != 0) {
                 return -IC_ERR_ENOMEM;
             }
-
-            rc = ic_enable_preview_mode(q, &preview);
 
             if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s%s",
                         IC_METHOD_RESPMOD, q->uri, IC_ICAP_ID,
@@ -1265,11 +1265,11 @@ static int ic_create_header(ic_query_int_t *q)
                 }
             }
 
+            rc += ic_enable_preview_mode(q, &preview);
+
             if (rc != 0) {
                 return -IC_ERR_ENOMEM;
             }
-
-            rc = ic_enable_preview_mode(q, &preview);
 
             if ((q->cl.icap_hdr_len = asprintf(&q->cl.icap_hdr, "%s %s %s\r\n%s%s%s",
                         IC_METHOD_REQMOD, q->uri, IC_ICAP_ID,
