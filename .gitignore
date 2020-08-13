@@ -1,4 +1,5 @@
 libicap.so
+libicap.so.0
 ic_test_cl
 ic_test_raw
 ic_test_chunked

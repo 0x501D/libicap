@@ -1,5 +1,6 @@
 CC = gcc
-CFLAGS = -O0 -ggdb -Wall -Wextra -Wformat-security -pedantic -fvisibility=hidden -shared -fPIC
+CFLAGS = -O0 -ggdb -Wall -Wextra -Wformat-security -Wl,-soname,libicap.so.0 \
+				 -pedantic -fvisibility=hidden -shared -fPIC
 SRC = $(wildcard *.c)
 OBJ = $(SRC:.c=.o)
 DEP = $(OBJ:.o=.d)
@@ -12,6 +13,9 @@ libicap.so: $(OBJ)
 %.d: %.c
 	@$(CC) $< -MM -MT $(@:.d=.o) >$@
 
+install: libicap.so
+	ln -sf libicap.so libicap.so.0
+
 test_single:
 	$(MAKE) -C test all TESTFLAGS=-DIC_TEST_SINGLE
 
@@ -22,6 +26,6 @@ test_clean:
 	$(MAKE) -C test clean
 
 clean:
-	rm -f libicap.so *.o *.d
+	rm -f libicap.so libicap.so.0 *.o *.d
 
-.PHONY: test_single test_multi clean test_clean
+.PHONY: test_single test_multi clean test_clean install
