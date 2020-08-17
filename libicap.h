@@ -52,6 +52,7 @@ int ic_get_status_code(ic_query_t *q);
 const char *ic_get_icap_hdr(ic_query_t *q);
 const char *ic_get_req_hdr(ic_query_t *q);
 const char *ic_get_resp_hdr(ic_query_t *q);
+uint64_t ic_get_content_len(ic_query_t *q);
 /** @return NULL if ERROR */
 const char *ic_get_content(ic_query_t *q, size_t *len, int *err);
 
