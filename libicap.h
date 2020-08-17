@@ -27,9 +27,9 @@ typedef enum ic_ctx_type {
 int ic_query_init(ic_query_t *q);
 int ic_connect(ic_query_t *q, const char *srv, uint16_t port);
 int ic_get_options(ic_query_t *q, const char *service);
-int ic_send_respmod(ic_query_t *q);
 
 /** @return 0 if got respond, 1 if not all chunk data was send, < 0 if error */
+int ic_send_respmod(ic_query_t *q);
 int ic_send_reqmod(ic_query_t *q);
 
 int ic_set_service(ic_query_t *q, const char *service);
