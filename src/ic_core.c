@@ -1618,15 +1618,17 @@ IC_EXPORT const char *ic_get_icap_hdr(ic_query_t *q)
     return icap->srv.icap_hdr;
 }
 
-IC_EXPORT uint64_t ic_get_content_len(ic_query_t *q)
+IC_EXPORT int ic_get_content_len(ic_query_t *q, uint64_t *len)
 {
     ic_query_int_t *icap = ic_int_query(q);
 
-    if (!icap) {
-        return NULL;
+    if (!icap || !len) {
+        return -1;
     }
 
-    return icap->cl.content_len;
+    *len = icap->cl.content_len;
+
+    return 0;
 }
 
 IC_EXPORT const char *ic_get_content(ic_query_t *q, size_t *len, int *err)
