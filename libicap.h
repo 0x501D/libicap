@@ -11,6 +11,7 @@ extern "C" {
 #define IC_CODE_OK          200
 #define IC_CODE_NO_CONTENT  204
 #define IC_CODE_BAD_REQUEST 400
+#define IC_CODE_NOT_FOUND   404
 #define IC_CODE_REQ_TIMEOUT 408
 
 typedef struct ic_query {

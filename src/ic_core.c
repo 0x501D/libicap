@@ -141,6 +141,7 @@ IC_EXPORT const char *ic_err_msg[] = {
     "Bad request",
     "Cannot get methods list from server response",
     "Connection to ICAP service is closed",
+    "ICAP service not found",
     "Request timeout"
 };
 
@@ -1580,6 +1581,8 @@ static int ic_read_from_service(ic_query_int_t *q)
         rc = 2;
     } else if (q->srv.rc == IC_CODE_REQ_TIMEOUT) {
         return -IC_ERR_REQ_TIMEOUT;
+    } else if (q->srv.rc == IC_CODE_NOT_FOUND) {
+        return -IC_ERR_NOT_FOUND;
     }
 
     if (q->srv.null_body) {
