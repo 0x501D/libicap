@@ -1294,7 +1294,7 @@ static int ic_poll_icap(ic_query_int_t *q)
     fd_set rset, wset;
     struct timeval tv;
 
-    tv.tv_sec = 60;
+    tv.tv_sec = 10;
     tv.tv_usec = 0;
 
     q->srv.n_alloc = IC_SRV_ALLOC_LEN;
@@ -1309,12 +1309,16 @@ static int ic_poll_icap(ic_query_int_t *q)
         FD_SET(q->sd, &wset);
         FD_SET(q->sd, &rset);
 
+        if (tv.tv_sec == 0 && tv.tv_usec == 0) {
+            break;
+        }
+
         rc = select(q->sd + 1, &rset, &wset, NULL, &tv);
         switch (rc) {
         case -1:
             return -IC_ERR_SELECT;
         case 0:
-            return -IC_ERR_SRV_TIMEOUT;
+            return -IC_ERR_SRV_TIMEOUT; /* XXX never get here */
         default:
             if (FD_ISSET(q->sd, &rset)) {
                 if (send_done) {
@@ -1352,7 +1356,9 @@ static int ic_poll_icap(ic_query_int_t *q)
                             break;
                         case 1: /* do not need to read */
                             ic_debug(q->debug_path, ">>> do not need to read\n");
-                            done = 1;
+                            send_done = 1;
+                            tv.tv_sec = 0;
+                            tv.tv_usec = 10000; /* check for errors in ICAP answer */
                             break;
                         case 2: /* write more */
                             ic_debug(q->debug_path, ">>> write more\n");
@@ -1452,7 +1458,8 @@ static int ic_send_to_service(ic_query_int_t *q)
 
         if (sended < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
             if (errno == ECONNRESET) {
-                /* connection reset by service, try to read error code */
+                ic_debug(q->debug_path,
+                        "connection reset by service, try to read error code");
                 return 0;
             }
             return -IC_ERR_SEND;
