@@ -1306,13 +1306,9 @@ static int ic_poll_icap(ic_query_int_t *q)
         FD_ZERO(&rset);
         FD_ZERO(&wset);
 
-        if (!send_done) {
-            FD_SET(q->sd, &wset);
-        } else {
-            FD_SET(q->sd, &rset);
-        }
+        FD_SET(q->sd, &wset);
+        FD_SET(q->sd, &rset);
 
-        /* TODO use exceptfds too */
         rc = select(q->sd + 1, &rset, &wset, NULL, &tv);
         switch (rc) {
         case -1:
@@ -1321,45 +1317,49 @@ static int ic_poll_icap(ic_query_int_t *q)
             return -IC_ERR_SRV_TIMEOUT;
         default:
             if (FD_ISSET(q->sd, &rset)) {
-                ic_debug(q->debug_path, ">>> read\n");
-                rc = ic_read_from_service(q);
+                if (send_done) {
+                    ic_debug(q->debug_path, ">>> read\n");
+                    rc = ic_read_from_service(q);
 
-                switch (rc) {
-                case 0: /* read done */
-                    ic_debug(q->debug_path, ">>> read done\n");
-                    done = 1;
-                    break;
-                case 1: /* read more */
-                    ic_debug(q->debug_path, ">>> read more\n");
-                    break;
-                case 2: /* 100 continue */
-                    ic_debug(q->debug_path, ">>> 100 continue\n");
-                    send_done = 0;
-                    break;
-                default: /* read error */
-                    ic_debug(q->debug_path, ">>> read error\n");
-                    return rc;
+                    switch (rc) {
+                        case 0: /* read done */
+                            ic_debug(q->debug_path, ">>> read done\n");
+                            done = 1;
+                            break;
+                        case 1: /* read more */
+                            ic_debug(q->debug_path, ">>> read more\n");
+                            break;
+                        case 2: /* 100 continue */
+                            ic_debug(q->debug_path, ">>> 100 continue\n");
+                            send_done = 0;
+                            break;
+                        default: /* read error */
+                            ic_debug(q->debug_path, ">>> read error\n");
+                            return rc;
+                    }
                 }
             }
 
             if (FD_ISSET(q->sd, &wset)) {
-                ic_debug(q->debug_path, ">>> write\n");
-                rc = ic_send_to_service(q);
+                if (!send_done) {
+                    ic_debug(q->debug_path, ">>> write\n");
+                    rc = ic_send_to_service(q);
 
-                switch (rc) {
-                case 0: /* write done */
-                    ic_debug(q->debug_path, ">>> write done\n");
-                    send_done = 1;
-                    break;
-                case 1: /* do not need to read */
-                    ic_debug(q->debug_path, ">>> do not need to read\n");
-                    done = 1;
-                    break;
-                case 2: /* write more */
-                    ic_debug(q->debug_path, ">>> write more\n");
-                    break;
-                default:
-                    return rc;
+                    switch (rc) {
+                        case 0: /* write done */
+                            ic_debug(q->debug_path, ">>> write done\n");
+                            send_done = 1;
+                            break;
+                        case 1: /* do not need to read */
+                            ic_debug(q->debug_path, ">>> do not need to read\n");
+                            done = 1;
+                            break;
+                        case 2: /* write more */
+                            ic_debug(q->debug_path, ">>> write more\n");
+                            break;
+                        default:
+                            return rc;
+                    }
                 }
             }
         }
@@ -1451,6 +1451,10 @@ static int ic_send_to_service(ic_query_int_t *q)
         }
 
         if (sended < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            if (errno == ECONNRESET) {
+                /* connection reset by service, try to read error code */
+                return 0;
+            }
             return -IC_ERR_SEND;
         }
     } while (sended > 0);
