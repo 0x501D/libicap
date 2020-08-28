@@ -13,6 +13,9 @@ libicap.so: $(OBJ)
 %.d: %.c
 	@$(CC) $< -MM -MT $(@:.d=.o) >$@
 
+debug: CFLAGS += -O0 -ggdb
+debug: libicap.so
+
 install: libicap.so
 	ln -sf libicap.so libicap.so.0
 
