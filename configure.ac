@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([libicap], [0.0.1-RC0], [mail@void.so], [libicap], [https://github.com/0x501D/libicap])
+AC_INIT([libicap], [0.0.1-RC0])
 AC_CONFIG_SRCDIR([src])
 AC_CONFIG_HEADERS([src/config.h])
 AM_INIT_AUTOMAKE([foreign 1.16])
