@@ -1,0 +1,10 @@
+single:
+	$(MAKE) -C test all TESTFLAGS=-DIC_TEST_SINGLE
+
+multi:
+	$(MAKE) -C test all TESTFLAGS=-DIC_TEST_MULTI
+
+clean:
+	$(MAKE) -C test clean
+
+.PHONY: single multi clean
