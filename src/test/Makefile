@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -O0 -ggdb -I../../ -Wall -Wextra -Wformat-security -pedantic
 CFLAGS += $(TESTFLAGS)
-LDFLAGS = -L../ -licap
+LDFLAGS = -L../.libs -licap
 
 ic_test_cl: ic_test_cl.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
