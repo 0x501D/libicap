@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O0 -ggdb -Wall -Wextra -Wformat-security -Wl,-soname,libicap.so.0 \
+CFLAGS = -Wall -Wextra -Wformat-security -Wl,-soname,libicap.so.0 \
 				 -pedantic -fvisibility=hidden -shared -fPIC
 SRC = $(wildcard *.c)
 OBJ = $(SRC:.c=.o)

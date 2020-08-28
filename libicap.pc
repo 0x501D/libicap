@@ -1,0 +1,13 @@
+prefix=/usr
+exec_prefix=/usr
+libdir=/usr/lib64
+includedir=/usr/include
+
+Name: libicap
+Description: ICAP protocol library for client side
+URL: https://github.com/0x501D/libicap
+Version: v0.0.1-RC0
+Requires:
+Libs.private: 
+Libs: -L${libdir} -licap
+Cflags: -I${includedir}
