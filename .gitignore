@@ -6,6 +6,8 @@ ic_test_chunked
 ic_test_cl_req
 *.o
 *.d
+*.lo
+*.la
 tags
 libicap.pc
 src/Makefile
@@ -26,3 +28,4 @@ src/config.h
 src/config.h.*
 src/stamp-h1
 configure
+src/.libs/
