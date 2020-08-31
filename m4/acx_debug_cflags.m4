@@ -20,7 +20,7 @@ AS_IF([test "$enable_debug" = "yes"], [
 	AC_DEFINE([DEBUG], [1], [debug build])
 	# gcc/gdb debug options
 	AS_IF([test "$GCC" = "yes"], [
-		DEBUG_CFLAGS="-ggdb -O0 -Werror -pedantic -Wno-format-non-iso"
+		DEBUG_CFLAGS="-ggdb -O0"
 	], [
 		ACX_DEBUG_CFLAGS_G
 	])
