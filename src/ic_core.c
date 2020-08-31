@@ -17,6 +17,7 @@
 
 #include "ic_err.h"
 #include "ic_utils.h"
+#include "config.h"
 
 typedef enum ic_method {
     IC_METHOD_ID_REQ,    /* REQMOD - for Request Modification      */
@@ -283,7 +284,7 @@ IC_EXPORT int ic_connect(ic_query_t *q, const char *srv, uint16_t port)
         return -IC_ERR_SRV_NONBLOCK;
     }
 
-#if 1 // debug only!
+#if defined(DEBUG)
 #include <netinet/tcp.h>
     int flag = 1;
     setsockopt(sd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int));
@@ -847,10 +848,6 @@ static int ic_send(ic_query_t *q, ic_method_t method)
                     }
                 }
             }
-
-            /*int fd = open("/tmp/preview_mode", O_CREAT | O_WRONLY, 0666);
-            write(fd, icap->cl.payload, icap->cl.payload_len);
-            close(fd); XXX remove after alfa version */
         } else if (icap->preview_mode && icap->preview_sended) {
             ic_debug(icap->debug_path, "add body part: %zu\n", icap->cl.body_len);
             memcpy(p, icap->cl.body, icap->cl.body_len);
@@ -910,10 +907,6 @@ static int ic_send(ic_query_t *q, ic_method_t method)
                 ic_debug(icap->debug_path, "zero chunk found\n");
             }
         }
-
-        /*int fd = open("/tmp/dump_chunked", O_CREAT | O_WRONLY, 0666);
-        write(fd, icap->cl.payload, icap->cl.payload_len);
-        close(fd);*/
     } else if (icap->cl.type == IC_CTX_TYPE_CLOSE) {
         /* RFC-3507: For objects arriving using a TCP close to signal the end of the
            object, each incoming group of bytes read from the OS can be converted

@@ -8,6 +8,7 @@ ic_test_cl_req
 *.d
 *.lo
 *.la
+m4/l*
 tags
 libicap.pc
 src/Makefile
