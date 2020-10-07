@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([libicap], [0.0.1-RC0])
+AC_INIT([libicap], [0.0.1-RC1])
 AC_CONFIG_MACRO_DIR([m4])
 ACX_DEBUG_CFLAGS
 AC_CONFIG_SRCDIR([src])
